@@ -19,7 +19,7 @@ import type {
 // bundle), fall back to the absolute localhost address.
 export const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
-  (import.meta.env.DEV ? "" : "http://127.0.0.1:8386");
+  (import.meta.env.DEV ? "" : "http://127.0.0.1:18386");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {

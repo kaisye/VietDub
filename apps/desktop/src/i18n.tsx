@@ -20,7 +20,7 @@ const vi = {
   backend_help_title: "Nguyên nhân thường gặp:",
   backend_help_1: "FastAPI chưa chạy — hãy dùng",
   backend_help_2: "hoặc",
-  backend_help_3: "Cổng 8386 đang bị chiếm — tắt Aether Studio hoặc đổi cổng",
+  backend_help_3: "Cổng backend đang bị chiếm — đóng tiến trình VietDub cũ rồi thử lại",
   backend_help_4: "Thiếu thư viện Python — chạy",
 
   // ── Common ────────────────────────────────────────────────────────────────
@@ -488,7 +488,7 @@ const en: T = {
   backend_help_title: "Common causes:",
   backend_help_1: "FastAPI is not running — use",
   backend_help_2: "or",
-  backend_help_3: "Port 8386 is in use — close Aether Studio or change the port",
+  backend_help_3: "The backend port is in use — close any previous VietDub process and retry",
   backend_help_4: "Missing Python dependencies — run",
 
   back: "← Back",

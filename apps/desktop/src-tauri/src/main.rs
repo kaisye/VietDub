@@ -69,7 +69,11 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
         return None;
     }
 
-    let port = std::env::var("AETHER_API_PORT").unwrap_or_else(|_| "8386".to_string());
+    // Keep packaged VietDub isolated from the source-development API. Otherwise
+    // a locally running VideoDubbing backend on 8386 can serve its database and
+    // secrets to the packaged WebView before VietDub's own sidecar starts.
+    let default_port = if cfg!(debug_assertions) { "8386" } else { "18386" };
+    let port = std::env::var("AETHER_API_PORT").unwrap_or_else(|_| default_port.to_string());
 
     // Resolve Python — honour AETHER_PYTHON, then probe common Conda/system
     // paths so the spawn works even when PATH is stripped (Windows services,

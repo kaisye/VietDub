@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import logoUrl from "./assets/vietdub-icon.svg";
-import { getRuntimeSettings, pingWithRetry } from "./api";
+import { API_BASE_URL, getRuntimeSettings, pingWithRetry } from "./api";
 import ConfigScreen from "./screens/Config";
 import NewVideoScreen from "./screens/NewVideo";
 import ProgressScreen from "./screens/Progress";
@@ -21,7 +21,7 @@ const DEFAULTS_KEY = "vd.defaults";
 const SETUP_SEEN_KEY = "vd.setup.seen";
 
 // Keep in sync with package.json
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.1";
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
 export function loadDefaults(): ToolDefaults {
@@ -177,7 +177,7 @@ function AppInner() {
           <div className="page">
             <div className="banner err">
               {t.backend_not_found}{" "}
-              <span className="mono">http://127.0.0.1:8386</span>{" "}
+              <span className="mono">{API_BASE_URL}</span>{" "}
               {lang === "vi" ? "sau 20 giây." : "after 20 seconds."}
             </div>
             <div className="backend-help card">

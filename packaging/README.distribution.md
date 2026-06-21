@@ -201,7 +201,7 @@ Không được xuất:
 
 ### Backend không sẵn sàng
 
-Đóng app, mở lại và kiểm tra không có ứng dụng khác chiếm cổng `8386`. Log nằm
+Đóng app, mở lại và kiểm tra không có tiến trình VietDub cũ chiếm cổng production `18386` (cổng dev vẫn là `8386`). Log nằm
 trong `storage/logs`. Antivirus có thể giữ PyInstaller sidecar ở lần chạy đầu.
 
 ### FFmpeg hoặc ffprobe không tìm thấy

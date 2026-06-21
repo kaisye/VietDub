@@ -420,7 +420,8 @@ web_origin = os.getenv("WEB_ORIGIN", "http://localhost:3000")
 _extra_origins = [
     "http://localhost:5173",   # Vite desktop dev server
     "http://127.0.0.1:5173",
-    "tauri://localhost",       # Tauri production WebView
+    "http://tauri.localhost",  # Tauri production WebView on Windows
+    "tauri://localhost",       # Tauri production WebView on macOS
     "https://tauri.localhost",
 ]
 app.add_middleware(

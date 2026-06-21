@@ -11,11 +11,15 @@ if ($destinationPath.TrimEnd('\') -eq $source.TrimEnd('\')) {
     throw "Destination must not be the VideoDubbing source directory."
 }
 
+# An existing git repo at the destination is the normal re-export target: its
+# .git (history + remote) is preserved by the mirror step at the end. Only refuse
+# a non-empty, NON-git destination unless -Force is given. Nothing is deleted
+# here — the final mirror keeps the destination in sync without wiping .git.
+$destinationHasGit = Test-Path (Join-Path $destinationPath ".git")
 if ((Test-Path $destinationPath) -and (Get-ChildItem $destinationPath -Force | Select-Object -First 1)) {
-    if (-not $Force) {
-        throw "Destination is not empty. Re-run with -Force only after checking the path: $destinationPath"
+    if (-not $Force -and -not $destinationHasGit) {
+        throw "Destination is not empty and is not a git repo. Re-run with -Force only after checking the path: $destinationPath"
     }
-    Remove-Item -LiteralPath $destinationPath -Recurse -Force
 }
 
 $staging = Join-Path ([IO.Path]::GetDirectoryName($destinationPath)) (".vietdub-export-" + [guid]::NewGuid())
@@ -78,12 +82,25 @@ try {
     & (Join-Path $source "scripts/scan-distribution.ps1") -Path $staging
     & (Join-Path $source "scripts/test-distribution.ps1") -Path $staging
 
-    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($destinationPath)) | Out-Null
-    if (Test-Path $destinationPath) {
-        Remove-Item -LiteralPath $destinationPath -Force
+    New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
+    # Mirror the staged tree into the destination while PRESERVING an existing
+    # .git directory (history + remote). /MIR removes destination files that are
+    # no longer in the whitelist; /XD .git keeps the repo metadata untouched.
+    # Mirroring in place also avoids deleting the destination folder, which fails
+    # when it is open/locked (e.g. shown in Explorer or an editor).
+    $mirrorArgs = @(
+        $staging, $destinationPath, "/MIR",
+        "/XD", ".git",
+        "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:1", "/W:1"
+    )
+    & robocopy @mirrorArgs | Out-Null
+    $code = $LASTEXITCODE
+    if ($code -ge 8) {
+        throw "robocopy mirror into destination failed (exit code $code). A destination file may be open/locked."
     }
-    Move-Item -LiteralPath $staging -Destination $destinationPath
-    Write-Host "Clean VietDub source exported to: $destinationPath"
+    $global:LASTEXITCODE = 0
+    Remove-Item -LiteralPath $staging -Recurse -Force
+    Write-Host "Clean VietDub source exported to: $destinationPath (.git preserved)"
 }
 catch {
     if (Test-Path $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
