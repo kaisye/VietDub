@@ -21,7 +21,7 @@ const DEFAULTS_KEY = "vd.defaults";
 const SETUP_SEEN_KEY = "vd.setup.seen";
 
 // Keep in sync with package.json
-const APP_VERSION = "0.1.3";
+const APP_VERSION = "0.1.4";
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
 export function loadDefaults(): ToolDefaults {
@@ -133,14 +133,14 @@ function AppInner() {
         </button>
       </header>
 
-      {(updater.status === "available" || updater.status === "downloading") && (
+      {(updater.status === "available" || updater.status === "downloading" || updater.status === "error") && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: "0.75rem",
             padding: "0.55rem 1rem",
-            background: "#16324f",
+            background: updater.status === "error" ? "#7f1d1d" : "#16324f",
             color: "#eaf2fb",
             fontSize: "0.85rem",
             borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -157,10 +157,20 @@ function AppInner() {
                 {lang === "vi" ? "Cập nhật & khởi động lại" : "Update & restart"}
               </button>
             </>
-          ) : (
+          ) : updater.status === "downloading" ? (
             <span>
               {lang === "vi" ? "Đang tải bản cập nhật" : "Downloading update"} {updater.progress}%
             </span>
+          ) : (
+            <>
+              <span>
+                {lang === "vi" ? "Cập nhật thất bại." : "Update failed."}{" "}
+                {updater.error ?? ""}
+              </span>
+              <button className="btn primary" onClick={() => void updater.check()}>
+                {lang === "vi" ? "Kiểm tra lại" : "Check again"}
+              </button>
+            </>
           )}
         </div>
       )}

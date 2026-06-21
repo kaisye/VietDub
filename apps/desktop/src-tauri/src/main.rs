@@ -14,6 +14,26 @@ use managed_tools::{install_9router, start_9router};
 /// Holds the FastAPI sidecar process so it can be terminated on exit.
 struct BackendProcess(Mutex<Option<Child>>);
 
+fn stop_backend_process(state: &BackendProcess) -> Result<(), String> {
+    let child = state
+        .0
+        .lock()
+        .map_err(|_| "Backend process lock is unavailable.".to_string())?
+        .take();
+    if let Some(mut child) = child {
+        if child.try_wait().map_err(|err| err.to_string())?.is_none() {
+            child.kill().map_err(|err| err.to_string())?;
+        }
+        child.wait().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn prepare_for_update(state: State<'_, BackendProcess>) -> Result<(), String> {
+    stop_backend_process(state.inner())
+}
+
 /// Locate the repository root by walking up from the current dir and the
 /// executable dir until `apps/api/app/main.py` is found. Used only for the dev
 /// fallback (running the backend from source via `python -m uvicorn`).
@@ -358,6 +378,7 @@ fn main() {
             start_9router,
             install_9router,
             managed_backend::update_backend,
+            prepare_for_update,
         ])
         .setup(|app| {
             let child = spawn_backend(app.handle());
@@ -370,10 +391,7 @@ fn main() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 let state: State<BackendProcess> = app_handle.state();
-                let child = state.0.lock().unwrap().take();
-                if let Some(mut child) = child {
-                    let _ = child.kill();
-                }
+                let _ = stop_backend_process(state.inner());
             }
         });
 }

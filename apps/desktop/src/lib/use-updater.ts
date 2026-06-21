@@ -16,7 +16,8 @@ type DownloadEvent =
 type Update = {
   version: string;
   available: boolean;
-  downloadAndInstall: (onEvent?: (event: DownloadEvent) => void) => Promise<void>;
+  download: (onEvent?: (event: DownloadEvent) => void) => Promise<void>;
+  install: () => Promise<void>;
 };
 
 function isTauri(): boolean {
@@ -33,40 +34,43 @@ export function useUpdater() {
   const [version, setVersion] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [update, setUpdate] = useState<Update | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const checkForUpdates = useCallback(async () => {
+    if (!isTauri()) return;
+    setStatus("checking");
+    setError(null);
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const found = (await check()) as unknown as Update | null;
+      if (found && found.available) {
+        setUpdate(found);
+        setVersion(found.version);
+        setStatus("available");
+      } else {
+        setUpdate(null);
+        setVersion(null);
+        setStatus("uptodate");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStatus("error");
+    }
+  }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    void (async () => {
-      setStatus("checking");
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater");
-        const found = (await check()) as unknown as Update | null;
-        if (cancelled) return;
-        if (found && found.available) {
-          setUpdate(found);
-          setVersion(found.version);
-          setStatus("available");
-        } else {
-          setStatus("uptodate");
-        }
-      } catch {
-        if (!cancelled) setStatus("error");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void checkForUpdates();
+  }, [checkForUpdates]);
 
   const install = useCallback(async () => {
     if (!update) return;
     setStatus("downloading");
     setProgress(0);
+    setError(null);
     try {
       let total = 0;
       let done = 0;
-      await update.downloadAndInstall((event) => {
+      await update.download((event) => {
         if (event.event === "Started") {
           total = event.data.contentLength ?? 0;
         } else if (event.event === "Progress") {
@@ -78,12 +82,16 @@ export function useUpdater() {
           setProgress(100);
         }
       });
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("prepare_for_update");
+      await update.install();
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
-    } catch {
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
       setStatus("error");
     }
   }, [update]);
 
-  return { status, version, progress, install };
+  return { status, version, progress, error, install, check: checkForUpdates };
 }
