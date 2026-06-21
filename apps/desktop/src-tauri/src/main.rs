@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, RunEvent, State};
 
 mod managed_backend;
 mod managed_tools;
-use managed_tools::{install_9router, start_9router};
+use managed_tools::{install_9router, start_9router, status_9router};
 
 /// Holds the FastAPI sidecar process so it can be terminated on exit.
 struct BackendProcess(Mutex<Option<Child>>);
@@ -376,6 +376,7 @@ fn main() {
             open_external_url,
             install_wsl_ubuntu,
             start_9router,
+            status_9router,
             install_9router,
             managed_backend::update_backend,
             prepare_for_update,

@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -19,6 +20,7 @@ const NODE_MACOS_ARM64_SHA256: &str =
 const ROUTER_VERSION: &str = "0.5.4";
 const ROUTER_INTEGRITY: &str =
     "ua55qQ3PQMtxypLHpBezvtYodJE315eeZ53AMIjkVMCwZTHlSHVtKJPMuaHs1dDrAqnZ3chrCMubTotCZr8J7g==";
+const ROUTER_ENDPOINT: &str = "http://127.0.0.1:20128/v1/models";
 
 #[tauri::command]
 pub async fn start_9router(app: AppHandle) -> Result<(), String> {
@@ -34,6 +36,13 @@ pub async fn install_9router(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || install_managed_9router(&data_dir))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn status_9router() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(managed_9router_ready)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
@@ -134,26 +143,75 @@ fn remove_incomplete_install(install_dir: &Path) -> Result<(), String> {
 }
 
 fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
+    if managed_9router_ready() {
+        return Ok(());
+    }
     let tools_dir = data_dir.join("tools");
     let node = managed_node_executable(&tools_dir);
     let cli = router_cli(&tools_dir);
     if !node.exists() || !cli.exists() {
         return Err("9router is not installed. Run the in-app setup first.".to_string());
     }
+    let runtime_dir = data_dir.join("runtime");
+    std::fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
+    let log_path = runtime_dir.join("9router.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Unable to open 9router log: {e}"))?;
+    let stderr = log
+        .try_clone()
+        .map_err(|e| format!("Unable to prepare 9router log: {e}"))?;
+
     let mut command = Command::new(&node);
     command
         .arg(cli)
+        .args([
+            "--tray",
+            "--skip-update",
+            "--no-browser",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "20128",
+        ])
         .current_dir(data_dir)
         .env("HOME", data_dir)
         .env("USERPROFILE", data_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr));
     prepend_managed_node_to_path(&mut command, &node)?;
-    command
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Unable to start managed 9router: {e}"))?;
+    thread::sleep(Duration::from_millis(1200));
+    if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        return Err(format!(
+            "9router exited immediately with status {status}. See {}",
+            log_path.display()
+        ));
+    }
     Ok(())
+}
+
+fn managed_9router_ready() -> bool {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(2500))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    match client.get(ROUTER_ENDPOINT).send() {
+        Ok(response) => {
+            response.status().is_success()
+                || response.status() == reqwest::StatusCode::UNAUTHORIZED
+                || response.status() == reqwest::StatusCode::FORBIDDEN
+        }
+        Err(_) => false,
+    }
 }
 
 fn router_cli(tools_dir: &Path) -> PathBuf {

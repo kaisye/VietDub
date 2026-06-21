@@ -143,7 +143,6 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         <NineRouterSetup
           onReady={() => {
             patch("local_translation_base_url", "http://localhost:20128/v1");
-            void openUrl("http://localhost:20128/dashboard");
           }}
         />
         <div className="field">
@@ -271,11 +270,7 @@ const PHASE_LABEL: Record<NineRouterPhase, string> = {
 
 async function ping9router(): Promise<boolean> {
   try {
-    const res = await fetch(`${NINE_ROUTER_ENDPOINT}/v1/models`, {
-      signal: AbortSignal.timeout(2500),
-    });
-    // 401 = running but needs auth key — still counts as up
-    return res.ok || res.status === 401 || res.status === 403;
+    return await invoke<boolean>("status_9router");
   } catch {
     return false;
   }
@@ -315,6 +310,7 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
     if (await ping9router()) {
       setPhase("running");
       onReadyRef.current();
+      void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`);
       return;
     }
 
@@ -326,6 +322,7 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
     if (await waitFor9router(6)) {
       setPhase("running");
       onReadyRef.current();
+      void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`);
       return;
     }
 
@@ -353,6 +350,7 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
     if (await waitFor9router(20)) {
       setPhase("running");
       onReadyRef.current();
+      void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`);
     } else {
       setPhase("error");
       setErrorMsg("9router đã khởi động nhưng chưa phản hồi. Thử mở http://localhost:20128 thủ công.");
