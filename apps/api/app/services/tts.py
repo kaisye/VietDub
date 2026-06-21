@@ -24,7 +24,7 @@ from .storage import ensure_storage
 from .subtitle import subtitle_to_plain_text
 from .tts_runtime import RUNTIME_EDGE, resolve_effective_tts_runtime
 from .vieneu_tts import VIENEU_PRESETS, is_vieneu_voice, synthesize_vieneu
-from .voice_options import list_voice_options
+from .voice_options import canonical_voice_id, list_voice_options
 
 
 logger = logging.getLogger(__name__)
@@ -2401,7 +2401,7 @@ def _copy_or_convert_audio_result(source: str | Path, output: Path) -> None:
 
 
 def _find_voice_option(voice_id: str):
-    normalized = (voice_id or "").strip()
+    normalized = canonical_voice_id(voice_id)
     if not normalized:
         return None
     return next((voice for voice in list_voice_options() if voice.id == normalized), None)

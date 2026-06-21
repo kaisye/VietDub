@@ -304,6 +304,49 @@ fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn install_wsl_ubuntu() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(install_wsl_ubuntu_blocking)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn install_wsl_ubuntu_blocking() -> Result<(), String> {
+    // Keep this command fixed: the UI cannot inject arbitrary elevated shell
+    // arguments. Start-Process is used solely to request the Windows UAC prompt.
+    let script = concat!(
+        "$process = Start-Process -FilePath 'wsl.exe' ",
+        "-ArgumentList @('--install','-d','Ubuntu-24.04','--no-launch') ",
+        "-Verb RunAs -Wait -PassThru; ",
+        "if ($process.ExitCode -ne 0) { exit $process.ExitCode }"
+    );
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .status()
+        .map_err(|error| format!("Unable to start the WSL installer: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "WSL installation was cancelled or failed (exit code {}).",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_wsl_ubuntu_blocking() -> Result<(), String> {
+    Err("Automatic WSL installation is only available on Windows.".to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -311,6 +354,7 @@ fn main() {
         .manage(BackendProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             open_external_url,
+            install_wsl_ubuntu,
             start_9router,
             install_9router,
             managed_backend::update_backend,

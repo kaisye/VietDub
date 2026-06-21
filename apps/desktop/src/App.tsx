@@ -21,7 +21,7 @@ const DEFAULTS_KEY = "vd.defaults";
 const SETUP_SEEN_KEY = "vd.setup.seen";
 
 // Keep in sync with package.json
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.1.3";
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
 export function loadDefaults(): ToolDefaults {

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .storage import ensure_storage
-from .voice_options import list_voice_options
+from .voice_options import canonical_voice_id, list_voice_options
 
 
 DEFAULT_VOICE_ID = "vi-VN-HoaiMyNeural"
@@ -24,6 +24,7 @@ def get_workspace_settings() -> WorkspaceSettings:
         data.get("default_voice_id")
         or os.getenv("AETHER_DEFAULT_VOICE_ID", DEFAULT_VOICE_ID)
     ).strip()
+    configured_voice = canonical_voice_id(configured_voice)
     known_voices = {voice.id for voice in list_voice_options()}
     if configured_voice not in known_voices:
         configured_voice = DEFAULT_VOICE_ID

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Download, Info, Pause, Play, Scissors } from "lucide-react";
 import {
   createVoiceOption,
@@ -270,6 +271,7 @@ function ColabStatusPanel({
   onSetup,
   onSwitchAccount,
   onSubmitAuthCode,
+  setupMessage,
   busy,
 }: {
   status: OmniVoiceColabStatus;
@@ -278,6 +280,7 @@ function ColabStatusPanel({
   onSetup: () => void;
   onSwitchAccount: () => void;
   onSubmitAuthCode: (code: string) => void;
+  setupMessage: string;
   busy: boolean;
 }) {
   const { t } = useT();
@@ -491,6 +494,12 @@ function ColabStatusPanel({
         </div>
       )}
 
+      {setupMessage && (
+        <div className="banner info" style={{ marginTop: 12, fontSize: 12 }}>
+          {setupMessage}
+        </div>
+      )}
+
       {needsSetup && (
         <div
           style={{
@@ -541,7 +550,11 @@ function ColabStatusPanel({
       <div className="actions" style={{ marginTop: 16 }}>
         {needsSetup && (
           <button className="btn primary" disabled={busy} onClick={onSetup}>
-            {busy ? t.colab_btn_installing : t.colab_btn_install}
+            {busy
+              ? t.colab_btn_installing
+              : !status.distro_available
+                ? t.colab_btn_install_wsl
+                : t.colab_btn_install}
           </button>
         )}
         {!needsSetup && !isLive && (
@@ -1455,6 +1468,7 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [section, setSection] = useState<"engine" | "colab" | "profiles">("engine");
   const [colabBusy, setColabBusy] = useState(false);
+  const [wslSetupMessage, setWslSetupMessage] = useState("");
   const [selectedDefaultVoice, setSelectedDefaultVoice] = useState("");
   const [setup, setSetup] = useState<OmniVoiceLocalSetup | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1602,6 +1616,30 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
       setColab(c);
     } catch (e) {
       setError(e instanceof Error ? e.message : t.voice_action_error);
+    } finally {
+      setColabBusy(false);
+    }
+  }
+
+  async function setupColabEnvironment() {
+    if (!colab) return;
+    setWslSetupMessage("");
+    if (colab.distro_available) {
+      await handleColabAction(setupColabCli);
+      return;
+    }
+
+    setColabBusy(true);
+    setError("");
+    try {
+      await invoke("install_wsl_ubuntu");
+      const refreshed = await getColabStatus().catch(() => null);
+      if (refreshed) setColab(refreshed);
+      // Windows may report the distro before the optional WSL features are
+      // usable. Always stop here so the required reboot can complete cleanly.
+      setWslSetupMessage(t.colab_wsl_install_complete);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.colab_wsl_install_failed);
     } finally {
       setColabBusy(false);
     }
@@ -1913,9 +1951,10 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
             <ColabStatusPanel
               status={colab}
               busy={colabBusy}
+              setupMessage={wslSetupMessage}
               onLaunch={() => void handleColabAction(launchColab)}
               onStop={() => void handleColabAction(stopColab)}
-              onSetup={() => void handleColabAction(setupColabCli)}
+              onSetup={() => void setupColabEnvironment()}
               onSwitchAccount={() => void handleColabAction(switchColabAccount)}
               onSubmitAuthCode={(code) => void handleColabAction(() => submitColabAuthCode(code))}
             />

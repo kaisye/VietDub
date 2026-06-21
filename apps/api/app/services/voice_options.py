@@ -10,6 +10,15 @@ from .storage import ensure_storage
 from .vieneu_tts import VIENEU_PRESETS
 
 NO_VOICE_ID = "none"
+BUNDLED_VOICE_DIR = Path(__file__).resolve().parents[1] / "assets" / "defaults" / "voice-library"
+LEGACY_BUNDLED_VOICE_IDS = {
+    "CDTeam": "omnivoice_clone_01",
+    "Best": "omnivoice_clone_02",
+    "vocie01": "omnivoice_clone_03",
+    "Voice03": "omnivoice_clone_04",
+    "Vocie04": "omnivoice_clone_05",
+    "voice05": "omnivoice_clone_06",
+}
 
 
 @dataclass
@@ -47,11 +56,51 @@ _VIENEU_VOICE_OPTIONS: list[VoiceOption] = [
 ]
 
 
+def _bundled_omnivoice_options() -> list[VoiceOption]:
+    manifest = BUNDLED_VOICE_DIR / "voices.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+
+    options: list[VoiceOption] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        audio_name = Path(str(item.get("reference_audio_file") or "")).name
+        audio_path = BUNDLED_VOICE_DIR / audio_name
+        if not audio_name or not audio_path.is_file():
+            continue
+        voice_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not voice_id or not name:
+            continue
+        options.append(
+            VoiceOption(
+                id=voice_id,
+                name=name,
+                locale=str(item.get("locale") or "vi-VN").strip(),
+                language=str(item.get("language") or "Vietnamese").strip(),
+                type=str(item.get("type") or "OmniVoice Clone").strip(),
+                description=str(item.get("description") or "").strip(),
+                omnivoice_mode="clone",
+                reference_audio_path=str(audio_path.resolve()),
+                reference_text=str(item.get("reference_text") or "").strip(),
+                instruction=str(item.get("instruction") or "").strip(),
+                engine="omnivoice",
+            )
+        )
+    return options
+
+
 DEFAULT_VOICE_OPTIONS: list[VoiceOption] = [
     VoiceOption(NO_VOICE_ID, "None", "none", "None", "Disabled", "Keep source audio without generating a dubbed voice."),
     VoiceOption("vi-VN-HoaiMyNeural", "Hoai My", "vi-VN", "Vietnamese", "Narration", "Vietnamese female narration voice for localized videos.", engine="edge"),
     VoiceOption("vi-VN-NamMinhNeural", "Nam Minh", "vi-VN", "Vietnamese", "Narration", "Vietnamese male narration voice for localized videos.", engine="edge"),
     *_VIENEU_VOICE_OPTIONS,
+    *_bundled_omnivoice_options(),
 ]
 
 
@@ -59,8 +108,20 @@ def list_voice_options() -> list[VoiceOption]:
     custom = _read_custom_options()
     merged: dict[str, VoiceOption] = {voice.id: voice for voice in DEFAULT_VOICE_OPTIONS}
     for voice in custom:
+        if voice.id in LEGACY_BUNDLED_VOICE_IDS:
+            continue
         merged[voice.id] = voice
     return list(merged.values())
+
+
+def canonical_voice_id(voice_id: str) -> str:
+    normalized = (voice_id or "").strip()
+    return LEGACY_BUNDLED_VOICE_IDS.get(normalized, normalized)
+
+
+def resolve_voice_option(voice_id: str) -> VoiceOption | None:
+    canonical = canonical_voice_id(voice_id)
+    return next((voice for voice in list_voice_options() if voice.id == canonical), None)
 
 
 def save_voice_option(option: VoiceOption) -> VoiceOption:

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "omnivoice_clone_01",
+    "name": "Giọng mặc định",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Trầm, nghiêm túc",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_01.wav",
+    "reference_text": "Tại sao vũ trụ lại lạnh đến vậy, bạn nghĩ nguyên nhân là vì mặt trời ở quá xa, nên nhiệt không thể truyền tới sao, sai rồi vì tàu thăm dò Voyager đã bay cực kỳ sát mặt trời",
+    "instruction": "",
+    "engine": "omnivoice"
+  },
+  {
+    "id": "omnivoice_clone_02",
+    "name": "Giọng viral",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Giọng nam trẻ, phù hợp nội dung ngắn",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_02.wav",
+    "reference_text": "Bạn đã gặp hiện tượng kỳ lạ này chưa, một mô hình AI đang được huấn luyện rất tốt, giá trị hàm mất mát đang giảm đều",
+    "instruction": "male, young adult, moderate pitch",
+    "engine": "omnivoice"
+  },
+  {
+    "id": "omnivoice_clone_03",
+    "name": "Giọng thuyết minh hài",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Giọng kể chuyện vui và giàu năng lượng",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_03.wav",
+    "reference_text": "Bạn nghĩ đây là một câu chuyện bình thường, sai bét. Đây là kiếp nạn thứ 82 của báo thủ này đấy, đây là lần báo thủ này suýt đăng xuất khỏi trái đất nhất",
+    "instruction": "",
+    "engine": "omnivoice"
+  },
+  {
+    "id": "omnivoice_clone_04",
+    "name": "Giọng phân tích",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Giọng phân tích rõ ràng, phù hợp nội dung công nghệ",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_04.wav",
+    "reference_text": "Bạn cắt nhiều tài liệu dài thành nhiều mẫu nhỏ để nhét vào RAG, cắt xong, mỗi mẫu mất luôn ngữ cảnh gốc. Một mẫu ghi, doanh thu tăng 3 phần trăm, của công ty nào",
+    "instruction": "",
+    "engine": "omnivoice"
+  },
+  {
+    "id": "omnivoice_clone_05",
+    "name": "Giọng thuyết minh nữ",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Giọng nữ thuyết minh tự nhiên",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_05.wav",
+    "reference_text": "Đây là lò đốt mạnh nhất mà tôi từng thấy, và nhiên liệu của lò đốt này chỉ là dầu thải rất phổ biến trong cuộc sống hàng ngày của chúng ta, dù là trong nhà bếp",
+    "instruction": "",
+    "engine": "omnivoice"
+  },
+  {
+    "id": "omnivoice_clone_06",
+    "name": "Giọng nữ thuyết minh 2",
+    "locale": "vi-VN",
+    "language": "Vietnamese",
+    "type": "OmniVoice Clone",
+    "description": "Giọng nữ cho nội dung khoa học và giải thích",
+    "omnivoice_mode": "clone",
+    "reference_audio_file": "omnivoice_clone_06.wav",
+    "reference_text": "Tại sao trái đất có thể treo lơ lửng trong không gian, mà không rơi vào vực sâu của vũ trụ do khối lượng khổng lồ của nó. Đó là loại lực lượng bí ẩn nào đang kiểm soát",
+    "instruction": "",
+    "engine": "omnivoice"
+  }
+]
