@@ -1,0 +1,35 @@
+{
+  "name": "@videodubbing/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "prepare:media": "node scripts/prepare-media-tools.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "check:rs": "powershell -ExecutionPolicy Bypass -Command \"$null=New-Item -ItemType Directory -Force src-tauri/binaries; $f='src-tauri/binaries/videodubbing-api-x86_64-pc-windows-msvc.exe'; if(!(Test-Path $f)){New-Item -ItemType File $f|Out-Null}\" && cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-process": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.0.0",
+    "clsx": "2.1.1",
+    "lucide-react": "0.469.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.13",
+    "@tauri-apps/api": "2.9.0",
+    "@tauri-apps/cli": "2.9.2",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.3.4",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "tailwindcss": "4.1.13",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  }
+}

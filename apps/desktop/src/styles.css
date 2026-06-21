@@ -1,0 +1,685 @@
+@import "tailwindcss";
+
+/* ----------------------------------------------------------------------------
+   Aether Studio design tokens (ported so the create wizard renders identically
+   to the studio web app). The legacy tool chrome below reuses these tokens.
+---------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+
+  --canvas: #f5efe4;
+  --canvas-deep: #eee4d5;
+  --surface: #fffdf8;
+  --surface-muted: #f9f5ed;
+  --surface-raised: #ffffff;
+  --surface-inverse: #27231f;
+
+  --text-primary: #1d1b18;
+  --text-secondary: #716b63;
+  --text-tertiary: #928a80;
+  --text-muted: #928a80;
+  --text-inverse: #fffdf8;
+
+  --border: rgba(63, 53, 43, 0.18);
+  --border-subtle: rgba(63, 53, 43, 0.1);
+  --border-strong: rgba(63, 53, 43, 0.3);
+
+  --primary: #e67831;
+  --primary-hover: #c85d1f;
+  --primary-soft: #f9dfc5;
+  --primary-ink: #6f3215;
+
+  --success: #47785c;
+  --success-soft: #dcecdf;
+  --info: #5f5884;
+  --info-soft: #e6e2f3;
+  --warning: #81651f;
+  --warning-soft: #f8e7b8;
+  --danger: #b6342d;
+  --danger-soft: #f6dedb;
+
+  --radius-control: 10px;
+  --radius-button: 10px;
+  --radius-panel-sm: 12px;
+  --radius-panel: 16px;
+  --radius-modal: 18px;
+  --radius-pill: 999px;
+
+  --shadow-panel: 0 18px 45px rgba(73, 53, 31, 0.1);
+  --shadow-float: 0 12px 30px rgba(73, 53, 31, 0.14);
+  --shadow-focus: 0 0 0 3px rgba(230, 120, 49, 0.18);
+
+  /* Aliases used by the legacy tool chrome. */
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
+  --bg: var(--canvas);
+  --radius: 10px;
+  --ok: var(--success);
+  --warn: var(--warning);
+  --err: var(--danger);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-color: rgba(63, 53, 43, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 4% 4%, rgba(255, 220, 154, 0.28), transparent 28rem),
+    radial-gradient(circle at 96% 2%, rgba(219, 193, 159, 0.2), transparent 30rem),
+    var(--canvas);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Override Tailwind's font-display to support Vietnamese */
+.font-display {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  color: var(--text-primary);
+  background: var(--primary-soft);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background: rgba(63, 53, 43, 0.28);
+  background-clip: padding-box;
+}
+
+.font-display {
+  font-family: "Arial Black", Arial, sans-serif;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.font-mono,
+code,
+pre,
+time {
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.aether-control {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.aether-control:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+/* ----------------------------------------------------------------------------
+   Legacy tool chrome (topbar + Config/History/Progress screens).
+   Element-level form/video overrides are scoped to `.page` so they never leak
+   into the Tailwind-styled create wizard.
+---------------------------------------------------------------------------- */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+.brand-logo {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.brand .dot {
+  color: var(--primary);
+}
+.spacer {
+  flex: 1;
+}
+
+.nav {
+  display: flex;
+  gap: 4px;
+}
+.nav button,
+.iconbtn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+}
+.nav button:hover,
+.iconbtn:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+.nav button.active,
+.iconbtn.active {
+  background: var(--primary-soft);
+  color: var(--primary-hover);
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+}
+.content > .page {
+  padding: 24px;
+}
+
+.appfooter {
+  flex: none;
+  padding: 6px 18px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+.footer-email {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--primary-hover);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.footer-email:hover {
+  color: var(--primary);
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+}
+.page h1 {
+  font-size: 24px;
+  font-weight: 800;
+  margin: 0 0 4px;
+}
+.page .sub {
+  color: var(--muted);
+  margin: 0 0 22px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.card h2 {
+  font-size: 15px;
+  margin: 0 0 14px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+.field > label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.field .hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.page input[type="text"],
+.page input[type="password"],
+.page input[type="url"],
+.page select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  font-size: 14px;
+  color: var(--text);
+}
+.page input:focus,
+.page select:focus {
+  outline: 2px solid #e8b894;
+  border-color: var(--primary);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+.row > * {
+  flex: 1;
+}
+
+.voice-media-import {
+  margin: 4px 0 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.voice-media-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px auto;
+  gap: 8px;
+}
+.waveform-editor {
+  margin-bottom: 12px;
+}
+.waveform-editor > audio {
+  display: none;
+}
+.waveform-track {
+  position: relative;
+  width: 100%;
+  height: 112px;
+  overflow: visible;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #f7f3f0;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.waveform-track canvas {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.waveform-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-top: 2px solid var(--primary);
+  border-bottom: 2px solid var(--primary);
+  background: rgb(200 95 40 / 8%);
+  pointer-events: none;
+}
+.waveform-handle {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  bottom: -1px;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--primary);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 80%);
+  cursor: ew-resize;
+  transform: translateX(-50%);
+}
+.waveform-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 4px;
+  height: 24px;
+  border-left: 1px solid rgb(255 255 255 / 75%);
+  border-right: 1px solid rgb(255 255 255 / 75%);
+  transform: translateY(-50%);
+}
+.waveform-handle:focus-visible {
+  outline: 3px solid #171311;
+  outline-offset: 2px;
+}
+.waveform-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+.waveform-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.waveform-toolbar strong {
+  color: var(--text);
+}
+.waveform-toolbar-spacer {
+  flex: 1;
+}
+.voice-length-advice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  font-size: 12px;
+  color: var(--ok);
+}
+.voice-length-advice.warn {
+  color: var(--warn);
+}
+@media (max-width: 720px) {
+  .voice-media-import-row {
+    grid-template-columns: 1fr;
+  }
+  .waveform-track {
+    height: 92px;
+  }
+  .waveform-toolbar strong {
+    display: none;
+  }
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 14px;
+}
+.btn:hover {
+  background: var(--surface-muted);
+}
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.btn.primary:hover {
+  background: var(--primary-hover);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.btn-link:hover {
+  color: var(--primary-hover);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.banner {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.banner.err {
+  background: var(--danger-soft);
+  color: var(--err);
+  border: 1px solid #f3c0bb;
+}
+.banner.ok {
+  background: var(--success-soft);
+  color: var(--ok);
+  border: 1px solid #bfe3cd;
+}
+.banner.warn {
+  background: var(--warning-soft);
+  color: var(--warn);
+  border: 1px solid #f0d8a8;
+}
+.banner.info {
+  background: var(--surface-muted);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.progress-track {
+  height: 10px;
+  background: #ece6dc;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.4s ease;
+}
+
+/* Colab bootstrap progress: determinate phase fill + an animated sheen so a
+   long phase (model download) still reads as active work, not a stall. */
+.colab-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--primary) 55%, white) 0%,
+    var(--primary) 50%,
+    color-mix(in srgb, var(--primary) 55%, white) 100%
+  );
+  background-size: 200% 100%;
+  animation: colab-sheen 1.4s linear infinite;
+  transition: width 0.5s ease;
+}
+@keyframes colab-sheen {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.steplist {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+}
+.steplist li {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.steplist li .mark {
+  width: 18px;
+}
+.steplist li.done {
+  color: var(--text);
+}
+.steplist li.active {
+  color: var(--primary-hover);
+  font-weight: 700;
+}
+
+.joblist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.jobrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.jobrow:hover {
+  border-color: #cdbfa9;
+}
+.jobrow .title {
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pill.ready {
+  background: var(--success-soft);
+  color: var(--ok);
+}
+.pill.failed {
+  background: var(--danger-soft);
+  color: var(--err);
+}
+.pill.run {
+  background: var(--warning-soft);
+  color: var(--warn);
+}
+.pill.idle {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.connecting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 60px 0;
+  color: var(--muted);
+}
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.backend-help {
+  margin-top: 0;
+}
+.backend-help ul {
+  margin: 8px 0 16px;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+.backend-help li {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--muted);
+}
+.mono {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+.page video {
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+  margin-top: 8px;
+}
+.logbox {
+  background: #1c1a17;
+  color: #e8e2d6;
+  padding: 12px;
+  border-radius: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}

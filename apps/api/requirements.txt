@@ -1,0 +1,28 @@
+fastapi==0.124.2
+uvicorn[standard]==0.38.0
+sqlalchemy==2.0.45
+pydantic==2.12.5
+pytest==9.0.2
+httpx==0.28.1
+cryptography>=45.0.0
+python-dotenv>=1.1.0
+yt-dlp>=2025.12.8
+edge-tts>=7.2.3
+# Offline Vietnamese TTS (CPU, ONNX/GGUF backbone, torch-free) — preset voices
+# served alongside Edge. Voice cloning is intentionally not used (needs torch).
+vieneu>=2.7.0
+# Hard-subtitle OCR (CPU): runs the PP-OCR detection/recognition models via
+# ONNXRuntime with models bundled in the wheel — no paddlepaddle, no runtime
+# download. Imported lazily, only when the "ocr" subtitle source is selected.
+# Pulls in onnxruntime, opencv-python, numpy and Pillow. Pinned low because
+# newer 1.3+/1.4+ wheels cap numpy<2, which conflicts with modern numpy; 1.2.x
+# runs the same PP-OCR models on numpy 2.x.
+rapidocr-onnxruntime>=1.2.3
+# Word-boundary recovery for OCR: splits fused Latin tokens ("spacefight" →
+# "space fight") produced when the PP-OCR detection model captures an entire
+# subtitle line in one box. Optional — pipeline degrades gracefully if absent.
+wordninja>=2.0.0
+requests>=2.32.5
+python-multipart>=0.0.20
+gradio_client>=1.13.3
+nvidia-riva-client>=2.19.0

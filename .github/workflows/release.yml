@@ -1,0 +1,98 @@
+name: Build VietDub installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# tauri-action creates/updates a GitHub Release and uploads the signed
+# installers plus latest.json (the auto-updater manifest).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          # GitHub's xlarge macOS runner is Apple Silicon (may require a paid plan).
+          - platform: macos-14-xlarge
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.17.0"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install backend dependencies + PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r apps/api/requirements.txt pyinstaller
+
+      - name: Freeze FastAPI backend sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./apps/desktop/scripts/build-backend.ps1 -Python python
+
+      - name: Freeze FastAPI backend sidecar (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python -m PyInstaller apps/api/videodubbing-api.spec --noconfirm --clean \
+            --distpath build/backend/dist --workpath build/backend/work
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp build/backend/dist/videodubbing-api \
+            "apps/desktop/src-tauri/binaries/videodubbing-api-${{ matrix.target }}"
+          chmod +x "apps/desktop/src-tauri/binaries/videodubbing-api-${{ matrix.target }}"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Prepare bundled FFmpeg/ffprobe
+        run: npm --workspace apps/desktop run prepare:media
+
+      - name: Build, sign and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Updater signing — store these as repository secrets. Without them the
+          # build still produces installers but cannot emit signed update artifacts.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
+          releaseName: "VietDub v__VERSION__"
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # Optional backend delta-update track (managed_backend.rs). Publishing a
+      # backend-manifest.json + the raw frozen backend lets the app pull a
+      # backend-only update without a full reinstall. The client is wired; this
+      # uploads the per-platform artifact. Aggregate into backend-manifest.json
+      # with scripts/make-backend-manifest.ps1 after both jobs finish.
+      - name: Upload frozen backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.target }}
+          path: |
+            apps/desktop/src-tauri/binaries/videodubbing-api-${{ matrix.target }}*
+          if-no-files-found: warn

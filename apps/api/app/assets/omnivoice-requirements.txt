@@ -1,0 +1,15 @@
+# OmniVoice local runtime dependencies.
+#
+# torch / torchaudio are intentionally NOT listed here: they are installed
+# separately by omnivoice_local_setup.py with a hardware-specific index
+# (CUDA 12.8 on NVIDIA, CPU otherwise, default/MPS on macOS).
+#
+# Mirrors omnivoice/requirements.txt from the OmniVoice service.
+omnivoice
+fastapi
+uvicorn[standard]
+python-multipart
+soundfile
+requests
+pyngrok
+numpy
