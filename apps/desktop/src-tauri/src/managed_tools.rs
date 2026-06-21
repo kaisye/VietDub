@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use base64::Engine;
 #[cfg(target_os = "macos")]
@@ -39,15 +41,16 @@ fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
     let downloads_dir = tools_dir.join("downloads");
     std::fs::create_dir_all(&downloads_dir).map_err(|e| e.to_string())?;
     let node = ensure_managed_node(&tools_dir, &downloads_dir)?;
-    let npm_cli = node
-        .parent()
-        .ok_or_else(|| "Invalid managed Node path".to_string())?
-        .join("node_modules")
-        .join("npm")
-        .join("bin")
-        .join("npm-cli.js");
+    let npm_cli = managed_npm_cli(&node)?;
     if !npm_cli.exists() {
         return Err("Managed Node archive does not contain npm-cli.js".to_string());
+    }
+
+    // Avoid running npm over a complete installation. On Windows that can leave
+    // files locked by a previously launched router and turn npm cleanup into an
+    // EPERM failure.
+    if router_cli(&tools_dir).exists() {
+        return Ok(());
     }
 
     let archive = downloads_dir.join(format!("9router-{ROUTER_VERSION}.tgz"));
@@ -58,12 +61,19 @@ fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
     verify_sha512_base64(&archive, ROUTER_INTEGRITY)?;
 
     let install_dir = tools_dir.join("9router");
+    remove_incomplete_install(&install_dir)?;
     std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
-    let output = Command::new(&node)
+    let mut command = Command::new(&node);
+    command
         .arg(&npm_cli)
         .args(["install", "--no-audit", "--no-fund", "--prefix"])
         .arg(&install_dir)
         .arg(&archive)
+        .current_dir(&install_dir)
+        .env("HOME", data_dir)
+        .env("USERPROFILE", data_dir);
+    prepend_managed_node_to_path(&mut command, &node)?;
+    let output = command
         .output()
         .map_err(|e| format!("Unable to run managed npm: {e}"))?;
     if !output.status.success() {
@@ -78,6 +88,51 @@ fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn managed_npm_cli(node: &Path) -> Result<PathBuf, String> {
+    let bin_dir = node
+        .parent()
+        .ok_or_else(|| "Invalid managed Node path".to_string())?;
+    #[cfg(target_os = "windows")]
+    let npm_cli = bin_dir.join("node_modules/npm/bin/npm-cli.js");
+    #[cfg(not(target_os = "windows"))]
+    let npm_cli = bin_dir.join("../lib/node_modules/npm/bin/npm-cli.js");
+    Ok(npm_cli)
+}
+
+fn prepend_managed_node_to_path(command: &mut Command, node: &Path) -> Result<(), String> {
+    let node_bin = node
+        .parent()
+        .ok_or_else(|| "Invalid managed Node path".to_string())?;
+    let mut paths = vec![node_bin.to_path_buf()];
+    if let Some(current) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current));
+    }
+    let path = std::env::join_paths(paths).map_err(|e| e.to_string())?;
+    command.env("PATH", path);
+    Ok(())
+}
+
+fn remove_incomplete_install(install_dir: &Path) -> Result<(), String> {
+    if !install_dir.exists() {
+        return Ok(());
+    }
+    let mut last_error = None;
+    for _ in 0..5 {
+        match std::fs::remove_dir_all(install_dir) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(300));
+            }
+        }
+    }
+    Err(format!(
+        "Unable to clean the incomplete 9router installation at {}: {}. Close VietDub and retry.",
+        install_dir.display(),
+        last_error.expect("cleanup attempted")
+    ))
+}
+
 fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
     let tools_dir = data_dir.join("tools");
     let node = managed_node_executable(&tools_dir);
@@ -85,12 +140,17 @@ fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
     if !node.exists() || !cli.exists() {
         return Err("9router is not installed. Run the in-app setup first.".to_string());
     }
-    Command::new(node)
+    let mut command = Command::new(&node);
+    command
         .arg(cli)
         .current_dir(data_dir)
+        .env("HOME", data_dir)
+        .env("USERPROFILE", data_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    prepend_managed_node_to_path(&mut command, &node)?;
+    command
         .spawn()
         .map_err(|e| format!("Unable to start managed 9router: {e}"))?;
     Ok(())

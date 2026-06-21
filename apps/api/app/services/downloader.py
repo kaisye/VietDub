@@ -334,6 +334,11 @@ def _download_with_ytdlp(
                     _download_sidecar_subtitle(url, root, job)
                 return video_path
             last_error = RuntimeError(f"yt-dlp finished without producing a video file for format selector: {format_selector}")
+        except FileNotFoundError as exc:
+            tool = Path(exc.filename).name if exc.filename else "ffmpeg/ffprobe"
+            raise RuntimeError(
+                f"Bundled media tool is unavailable: {tool}. Reinstall VietDub or verify the resources/bin folder."
+            ) from exc
         except Exception as exc:
             last_error = exc
             continue

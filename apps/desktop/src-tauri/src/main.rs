@@ -72,7 +72,11 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
     // Keep packaged VietDub isolated from the source-development API. Otherwise
     // a locally running VideoDubbing backend on 8386 can serve its database and
     // secrets to the packaged WebView before VietDub's own sidecar starts.
-    let default_port = if cfg!(debug_assertions) { "8386" } else { "18386" };
+    let default_port = if cfg!(debug_assertions) {
+        "8386"
+    } else {
+        "18386"
+    };
     let port = std::env::var("AETHER_API_PORT").unwrap_or_else(|_| default_port.to_string());
 
     // Resolve Python — honour AETHER_PYTHON, then probe common Conda/system
@@ -111,7 +115,8 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
     let runtime_dir = data_dir.join("runtime");
     let _ = std::fs::create_dir_all(&runtime_dir);
 
-    let mut command = if let Some(managed) = managed_backend::managed_backend_executable(&data_dir) {
+    let mut command = if let Some(managed) = managed_backend::managed_backend_executable(&data_dir)
+    {
         // Opt-in backend delta track: a verified, newer backend downloaded into
         // the per-user data dir takes precedence over the bundled sidecar.
         eprintln!("[desktop] Using managed backend: {}", managed.display());
@@ -184,14 +189,34 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
 }
 
 fn bundled_media_bin(app: &AppHandle) -> Option<PathBuf> {
-    let packaged = app.path().resource_dir().ok()?.join("bin");
-    if packaged.exists() {
-        return Some(packaged);
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        // NSIS preserves the configured `resources/bin/*` prefix, while other
+        // Tauri targets may expose the resource directory itself as that
+        // `resources` folder. Probe both layouts and require both executables.
+        for candidate in [resource_dir.join("bin"), resource_dir.join("resources/bin")] {
+            if has_media_tools(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(executable_dir) = executable.parent() {
+            let candidate = executable_dir.join("resources/bin");
+            if has_media_tools(&candidate) {
+                return Some(candidate);
+            }
+        }
     }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("bin");
-    dev.exists().then_some(dev)
+    has_media_tools(&dev).then_some(dev)
+}
+
+fn has_media_tools(directory: &Path) -> bool {
+    let extension = if cfg!(windows) { ".exe" } else { "" };
+    directory.join(format!("ffmpeg{extension}")).is_file()
+        && directory.join(format!("ffprobe{extension}")).is_file()
 }
 
 /// Spawn the 9router process (assumes already installed globally via npm).
@@ -226,16 +251,12 @@ async fn install_system_9router() -> Result<(), String> {
         let output = std::process::Command::new("cmd")
             .args(["/c", "npm install -g 9router"])
             .output()
-            .map_err(|_| {
-                "Node.js / npm chưa được cài. Tải tại https://nodejs.org".to_string()
-            })?;
+            .map_err(|_| "Node.js / npm chưa được cài. Tải tại https://nodejs.org".to_string())?;
         #[cfg(not(target_os = "windows"))]
         let output = std::process::Command::new("npm")
             .args(["install", "-g", "9router"])
             .output()
-            .map_err(|_| {
-                "Node.js / npm not found — install from https://nodejs.org".to_string()
-            })?;
+            .map_err(|_| "Node.js / npm not found — install from https://nodejs.org".to_string())?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
