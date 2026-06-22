@@ -55,6 +55,9 @@
         "installMode": "currentUser",
         "installerHooks": "windows/installer-hooks.nsh"
       }
+    },
+    "macOS": {
+      "signingIdentity": "-"
     }
   }
 }

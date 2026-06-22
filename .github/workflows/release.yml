@@ -106,6 +106,14 @@ jobs:
           retryAttempts: 2
           args: --verbose --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
+      - name: Verify macOS application signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP_PATH="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/VietDub.app"
+          test -d "$APP_PATH"
+          codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+
       # Optional backend delta-update track (managed_backend.rs). Publishing a
       # backend-manifest.json + the raw frozen backend lets the app pull a
       # backend-only update without a full reinstall. The client is wired; this

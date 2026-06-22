@@ -47,6 +47,16 @@ VietDub-{version}-macos-arm64.dmg.sha256
    nhận **Open**. Nếu macOS vẫn chặn, vào **System Settings > Privacy & Security**
    và chọn **Open Anyway**.
 
+Nếu một bản thử nghiệm cũ báo **“VietDub is damaged”**, chỉ sau khi checksum khớp
+với release tin cậy, mở Terminal và xóa cờ quarantine:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/VietDub.app
+```
+
+Sau đó nhấp phải VietDub và chọn **Open**. Bản build mới được ký ad-hoc và CI xác
+minh toàn bộ app bundle để không còn lỗi chữ ký không nhất quán này.
+
 Không phát hành công khai bản macOS unsigned. Sau khi có Apple Developer ID,
 thêm ký ứng dụng và notarization vào workflow trước khi phân phối rộng rãi.
 
