@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "videodubbing-desktop"
 version = "0.1.9"
 description = "VietDub desktop shell"
