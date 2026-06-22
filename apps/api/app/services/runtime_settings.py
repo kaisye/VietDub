@@ -81,7 +81,7 @@ def get_runtime_settings() -> RuntimeSettings:
             data.get("translation_provider") or os.getenv("AETHER_TRANSLATION_PROVIDER", "openai-compatible")
         ).strip(),
         translation_nvidia_model=str(
-            data.get("translation_nvidia_model") or os.getenv("NVIDIA_MODEL", "nvidia/chatgpt-oss-120b")
+            data.get("translation_nvidia_model") or os.getenv("NVIDIA_MODEL", "gpt-oss-120b")
         ).strip(),
         local_translation_base_url=str(
             data.get("local_translation_base_url")

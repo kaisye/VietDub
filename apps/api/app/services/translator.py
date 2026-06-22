@@ -976,8 +976,8 @@ def _nvidia_fallback_model() -> str:
     return (
         settings.translation_nvidia_model
         or os.getenv("NVIDIA_MODEL")
-        or "openai/gpt-oss-120b"
-    ).strip() or "openai/gpt-oss-120b"
+        or "gpt-oss-120b"
+    ).strip() or "gpt-oss-120b"
 
 
 def _request_translation_completion(model: str, system_prompt: str, user_prompt: str) -> str:
@@ -1387,7 +1387,7 @@ def _translation_provider() -> str:
 def _translation_model() -> str:
     settings = get_runtime_settings()
     if _translation_provider() == "nvidia":
-        return (settings.translation_nvidia_model or os.getenv("NVIDIA_MODEL", "openai/gpt-oss-120b")).strip() or "openai/gpt-oss-120b"
+        return (settings.translation_nvidia_model or os.getenv("NVIDIA_MODEL", "gpt-oss-120b")).strip() or "gpt-oss-120b"
     return (
         settings.local_translation_model
         or os.getenv("AETHER_LOCAL_TRANSLATION_MODEL")
