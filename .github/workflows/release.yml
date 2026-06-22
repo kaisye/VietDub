@@ -28,7 +28,7 @@ jobs:
             bundles: app,dmg
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Verify release credentials
         shell: bash
@@ -40,11 +40,11 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24.17.0"
           cache: npm
@@ -112,7 +112,7 @@ jobs:
       # uploads the per-platform artifact. Aggregate into backend-manifest.json
       # with scripts/make-backend-manifest.ps1 after both jobs finish.
       - name: Upload frozen backend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: backend-${{ matrix.target }}
           path: |
