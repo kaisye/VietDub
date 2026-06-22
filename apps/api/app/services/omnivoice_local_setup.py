@@ -337,7 +337,13 @@ def _ensure_managed_python() -> list[str]:
         staged_python = staging / "python" / "bin" / "python3"
         if not staged_python.exists():
             raise RuntimeError("Managed Python archive does not contain python/bin/python3.")
-        staged_python.chmod(staged_python.stat().st_mode | 0o111)
+        # filter="data" strips setuid/setgid but can also drop exec bits from
+        # scripts inside bin/. Re-apply exec permission to every file under
+        # bin/ so pip and other entry-points are runnable.
+        bin_dir = staging / "python" / "bin"
+        for entry in bin_dir.iterdir():
+            if entry.is_file():
+                entry.chmod(entry.stat().st_mode | 0o111)
         shutil.rmtree(MANAGED_PYTHON_DIR, ignore_errors=True)
         staging.replace(MANAGED_PYTHON_DIR)
     except Exception:
