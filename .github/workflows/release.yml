@@ -98,7 +98,7 @@ jobs:
           releaseCommitish: main
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
           releaseName: "VietDub v__VERSION__"
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           # Tauri's DMG helper occasionally fails on hosted macOS runners while
           # talking to hdiutil/Finder. Verbose output preserves the real cause,
