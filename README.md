@@ -93,8 +93,8 @@ API key chỉ được lưu trong thư mục dữ liệu người dùng. Không 
 - **OmniVoice Colab/remote**: nhập URL và key của dịch vụ trong cấu hình giọng.
 - **OmniVoice local**: chọn cài runtime. VietDub tạo venv riêng trong app-data rồi
   tải PyTorch/model phù hợp. Máy Mac dùng MPS; Windows ưu tiên NVIDIA CUDA và có
-  thể chạy CPU nhưng rất chậm. Trên macOS, cài Python 3.12 từ python.org trước;
-  VietDub tự dò cả bản python.org và Homebrew ngay cả khi mở app từ Finder.
+  thể chạy CPU nhưng rất chậm. Trên Apple Silicon, VietDub tự tải khoảng 25 MB
+  Python portable đã xác minh checksum; người dùng không cần cài Python thủ công.
 
 VietDub không kèm audio tham chiếu, transcript hay instruction cá nhân. Người
 dùng phải tự cung cấp dữ liệu giọng mà mình có quyền sử dụng.

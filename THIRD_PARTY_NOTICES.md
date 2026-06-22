@@ -14,6 +14,9 @@ Notable runtime components include:
 - RapidOCR/ONNX Runtime and VieNeu, downloaded Python dependencies governed by
   their own package licenses.
 - Node.js, downloaded on demand from nodejs.org under the Node.js license.
+- Python 3.12 standalone runtime, downloaded on demand from
+  `astral-sh/python-build-standalone`, governed by the Python Software Foundation
+  license and the notices included in that distribution.
 - 9router, downloaded on demand from npm under the license published with the
   pinned package version.
 

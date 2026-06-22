@@ -1705,13 +1705,14 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
       : setupTarget === "mps" ? t.setup_target_mps
         : t.setup_target_cpu;
   const setupStateLabel =
-    setup?.state === "creating_venv" ? t.setup_state_creating_venv
-      : setup?.state === "installing_torch" ? t.setup_state_installing_torch
-        : setup?.state === "installing_deps" ? t.setup_state_installing_deps
-          : setup?.state === "verifying" ? t.setup_state_verifying
-            : setup?.state === "ready" ? t.setup_state_ready
-              : setup?.state === "error" ? t.setup_state_error
-                : "";
+    setup?.state === "installing_python" ? t.setup_state_installing_python
+      : setup?.state === "creating_venv" ? t.setup_state_creating_venv
+        : setup?.state === "installing_torch" ? t.setup_state_installing_torch
+          : setup?.state === "installing_deps" ? t.setup_state_installing_deps
+            : setup?.state === "verifying" ? t.setup_state_verifying
+              : setup?.state === "ready" ? t.setup_state_ready
+                : setup?.state === "error" ? t.setup_state_error
+                  : "";
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "6px 14px",

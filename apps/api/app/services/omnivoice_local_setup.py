@@ -6,20 +6,26 @@ on macOS — plus the OmniVoice runtime dependencies. The work runs in a daemon
 thread and exposes a coarse-grained progress status that mirrors the Colab setup
 flow so the desktop UI can poll it.
 
-The frozen production backend cannot build a venv from its own interpreter, so a
-real system Python is located via the ``py`` launcher / ``python3.12``.
+The frozen production backend cannot build a venv from its own interpreter. A
+system Python is reused when available; Apple Silicon otherwise receives a
+pinned, checksum-verified standalone Python runtime under app-data.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from .omnivoice_local_runtime import PROJECT_DIR, RUNTIME_DIR, SOURCE_API_DIR, clear_validation_cache
 from .storage import ensure_storage
@@ -30,6 +36,20 @@ REQUIREMENTS_PATH = RUNTIME_DIR / "requirements.txt"
 VENV_DIR = PROJECT_DIR / ".venv-omnivoice"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+MANAGED_PYTHON_VERSION = "3.12.13"
+MANAGED_PYTHON_BUILD = "20260610"
+MANAGED_PYTHON_ARCHIVE_NAME = (
+    f"cpython-{MANAGED_PYTHON_VERSION}+{MANAGED_PYTHON_BUILD}"
+    "-aarch64-apple-darwin-install_only.tar.gz"
+)
+MANAGED_PYTHON_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/"
+    f"{MANAGED_PYTHON_BUILD}/cpython-{MANAGED_PYTHON_VERSION}%2B{MANAGED_PYTHON_BUILD}"
+    "-aarch64-apple-darwin-install_only.tar.gz"
+)
+MANAGED_PYTHON_SHA256 = "e18ddd4c1e8f4a1d6c4590b37f423d76aec734447edc20ed08e93983d95f2132"
+MANAGED_PYTHON_DIR = RUNTIME_DIR / f"python-{MANAGED_PYTHON_VERSION}-macos-arm64"
+MANAGED_PYTHON_PATH = MANAGED_PYTHON_DIR / "python" / "bin" / "python3"
 
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -81,7 +101,8 @@ def start_local_omnivoice_setup() -> dict[str, Any]:
 
         _materialize_requirements()
         base_python, detect_error = _find_base_python()
-        if base_python is None:
+        install_managed_python = base_python is None and _managed_python_supported()
+        if base_python is None and not install_managed_python:
             _state = "error"
             _error = detect_error
             _message = ""
@@ -93,7 +114,8 @@ def start_local_omnivoice_setup() -> dict[str, Any]:
         _error = ""
         _started_at = time.time()
         _finished_at = None
-        _log(f"\n[{_now()}] Starting OmniVoice setup (target={_target}, base={' '.join(base_python)})\n")
+        base_label = "managed Python download" if install_managed_python else " ".join(base_python or [])
+        _log(f"\n[{_now()}] Starting OmniVoice setup (target={_target}, base={base_label})\n")
         _thread = threading.Thread(target=_run_setup, args=(base_python, _target), daemon=True)
         _thread.start()
         return _status_locked()
@@ -122,10 +144,12 @@ def _set_state(state: str, message: str) -> None:
     _log(f"[{_now()}] {state}: {message}\n")
 
 
-def _run_setup(base_python: list[str], target: str) -> None:
+def _run_setup(base_python: list[str] | None, target: str) -> None:
     global _state, _message, _error, _finished_at
     venv_python = _venv_python()
     try:
+        if base_python is None:
+            base_python = _ensure_managed_python()
         if not venv_python.exists():
             _set_state("creating_venv", "Creating .venv-omnivoice…")
             _run(base_python + ["-m", "venv", str(VENV_DIR)])
@@ -224,7 +248,7 @@ def _find_base_python() -> tuple[list[str] | None, str]:
     if system == "Darwin":
         # Apps opened from Finder do not inherit the shell PATH. Check the
         # standard python.org and Homebrew locations before command names.
-        candidates = [
+        candidates = [[str(MANAGED_PYTHON_PATH)]] + [
             [f"/Library/Frameworks/Python.framework/Versions/{version}/bin/python{version}"]
             for version in ("3.12", "3.11", "3.10")
         ]
@@ -274,6 +298,108 @@ def _find_base_python() -> tuple[list[str] | None, str]:
     else:
         hint = "No suitable Python found. Install Python 3.12, then retry."
     return None, f"{hint} [{' | '.join(errors)}]"
+
+
+def _managed_python_supported() -> bool:
+    return platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def _ensure_managed_python() -> list[str]:
+    existing_version = _python_version([str(MANAGED_PYTHON_PATH)])
+    if existing_version is not None and existing_version >= (3, 10):
+        return [str(MANAGED_PYTHON_PATH)]
+
+    _set_state(
+        "installing_python",
+        f"Downloading Python {MANAGED_PYTHON_VERSION} for Apple Silicon (about 25 MB)…",
+    )
+    downloads_dir = RUNTIME_DIR / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    archive = downloads_dir / MANAGED_PYTHON_ARCHIVE_NAME
+    if not archive.exists() or _sha256(archive) != MANAGED_PYTHON_SHA256:
+        archive.unlink(missing_ok=True)
+        _download_managed_python_archive(archive)
+
+    actual_hash = _sha256(archive)
+    if actual_hash != MANAGED_PYTHON_SHA256:
+        archive.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Managed Python checksum mismatch. "
+            f"Expected {MANAGED_PYTHON_SHA256}, got {actual_hash}."
+        )
+
+    staging = MANAGED_PYTHON_DIR.with_name(f"{MANAGED_PYTHON_DIR.name}.installing")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(archive, mode="r:gz") as bundle:
+            bundle.extractall(staging, filter="data")
+        staged_python = staging / "python" / "bin" / "python3"
+        if not staged_python.exists():
+            raise RuntimeError("Managed Python archive does not contain python/bin/python3.")
+        staged_python.chmod(staged_python.stat().st_mode | 0o111)
+        shutil.rmtree(MANAGED_PYTHON_DIR, ignore_errors=True)
+        staging.replace(MANAGED_PYTHON_DIR)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    installed_version = _python_version([str(MANAGED_PYTHON_PATH)])
+    if installed_version is None or installed_version < (3, 10):
+        shutil.rmtree(MANAGED_PYTHON_DIR, ignore_errors=True)
+        raise RuntimeError("Managed Python was extracted but could not be started.")
+    _log(f"[{_now()}] Managed Python {installed_version[0]}.{installed_version[1]} ready.\n")
+    return [str(MANAGED_PYTHON_PATH)]
+
+
+def _download_managed_python_archive(destination: Path) -> None:
+    temporary = destination.with_suffix(f"{destination.suffix}.download")
+    temporary.unlink(missing_ok=True)
+    digest = hashlib.sha256()
+    downloaded = 0
+    last_reported = -10
+    try:
+        with httpx.stream(
+            "GET",
+            MANAGED_PYTHON_URL,
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, read=300.0),
+        ) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or 0)
+            with temporary.open("wb") as handle:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        progress = min(100, int(downloaded * 100 / total))
+                        if progress >= last_reported + 10:
+                            last_reported = progress
+                            _set_state(
+                                "installing_python",
+                                f"Downloading Python {MANAGED_PYTHON_VERSION}… {progress}%",
+                            )
+        actual_hash = digest.hexdigest()
+        if actual_hash != MANAGED_PYTHON_SHA256:
+            raise RuntimeError(
+                "Managed Python download checksum mismatch. "
+                f"Expected {MANAGED_PYTHON_SHA256}, got {actual_hash}."
+            )
+        temporary.replace(destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _python_version(cmd: list[str]) -> tuple[int, int] | None:
