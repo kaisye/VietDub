@@ -30,6 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release credentials
+        shell: bash
+        env:
+          VIETDUB_PUBLIC_RELEASE_TOKEN: ${{ secrets.VIETDUB_PUBLIC_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$VIETDUB_PUBLIC_RELEASE_TOKEN" ]; then
+            echo "::error::Missing VIETDUB_PUBLIC_RELEASE_TOKEN. Add a fine-grained PAT for kaisye/VietDubPublic with Contents: Read and write."
+            exit 1
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -90,7 +100,11 @@ jobs:
           releaseName: "VietDub v__VERSION__"
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # Tauri's DMG helper occasionally fails on hosted macOS runners while
+          # talking to hdiutil/Finder. Verbose output preserves the real cause,
+          # and retries reuse the compiled target instead of rebuilding it all.
+          retryAttempts: 2
+          args: --verbose --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # Optional backend delta-update track (managed_backend.rs). Publishing a
       # backend-manifest.json + the raw frozen backend lets the app pull a
