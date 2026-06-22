@@ -20,8 +20,6 @@ export type ToolDefaults = { targetLanguage: string; voice: string };
 const DEFAULTS_KEY = "vd.defaults";
 const SETUP_SEEN_KEY = "vd.setup.seen";
 
-// Keep in sync with package.json
-const APP_VERSION = "0.1.7";
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
 export function loadDefaults(): ToolDefaults {
@@ -44,7 +42,17 @@ function AppInner() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [backendReady, setBackendReady] = useState<boolean | null>(null);
   const [connectAttempt, setConnectAttempt] = useState(0);
+  const [appVersion, setAppVersion] = useState("0.1.9");
   const updater = useUpdater();
+
+  useEffect(() => {
+    if ("__TAURI_INTERNALS__" in window) {
+      import("@tauri-apps/api/app")
+        .then(({ getVersion }) => getVersion())
+        .then(setAppVersion)
+        .catch(() => {});
+    }
+  }, []);
 
   const connectBackend = useCallback(async () => {
     setBackendReady(null);
@@ -228,7 +236,7 @@ function AppInner() {
       </main>
 
       <footer className="appfooter">
-        © {new Date().getFullYear()} {t.app_title} · v{APP_VERSION} · {t.footer_rights}
+        © {new Date().getFullYear()} {t.app_title} · v{appVersion} · {t.footer_rights}
         {" · "}
         {t.footer_contact}:{" "}
         <button
