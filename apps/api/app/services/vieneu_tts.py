@@ -25,12 +25,22 @@ from .storage import ensure_storage
 logger = logging.getLogger(__name__)
 
 
-# (preset_id, display_name, accent) — ids MUST match the model's voices.json exactly.
+# (preset_id, display_name, accent) — ids MUST match the installed VieNeu model's
+# voices.json exactly. These are the built-in preset voices of VieNeu-TTS v3 Turbo,
+# the default model in vieneu >= 3.x, keyed by their full Vietnamese names. (The old
+# v2 short codes like "Tuyen"/"Vinh"/"Ly"/"Sơn" no longer exist in v3, which is why
+# every VieNeu cue failed with "Voice 'Tuyen' not found".)
 VIENEU_PRESETS: list[tuple[str, str, str]] = [
-    ("Tuyen", "Phạm Tuyên", "Nam · miền Bắc"),
-    ("Vinh", "Xuân Vĩnh", "Nam · miền Nam"),
-    ("Ly", "Trúc Ly", "Nữ · miền Bắc"),
-    ("Sơn", "Thái Sơn", "Nam · miền Nam"),
+    ("Ngọc Linh", "Ngọc Linh", "Nữ · giọng tươi sáng"),
+    ("Ngọc Lan", "Ngọc Lan", "Nữ · giọng dịu dàng"),
+    ("Mỹ Duyên", "Mỹ Duyên", "Nữ · giọng mượt mà"),
+    ("Trúc Ly", "Trúc Ly", "Nữ · giọng trẻ trung"),
+    ("Gia Bảo", "Gia Bảo", "Nam · giọng mượt mà"),
+    ("Thái Sơn", "Thái Sơn", "Nam · giọng chắc khỏe"),
+    ("Đức Trí", "Đức Trí", "Nam · giọng rõ ràng"),
+    ("Xuân Vĩnh", "Xuân Vĩnh", "Nam · giọng vui tươi"),
+    ("Trọng Hữu", "Trọng Hữu", "Nam · giọng uyên bác"),
+    ("Bình An", "Bình An", "Nam · giọng điềm đạm"),
 ]
 VIENEU_VOICE_IDS = {preset[0] for preset in VIENEU_PRESETS}
 
@@ -43,20 +53,21 @@ def is_vieneu_voice(voice_id: str) -> bool:
 
 
 def _vieneu_temperature() -> float:
-    # Use the library default (1.0). Lowering it (tried 0.6) made the autoregressive
-    # model emit the END token early on some lines → it read only part of the text
-    # ("đọc không đủ chữ"). 1.0 reads the full line reliably for the kept voices.
+    # VieNeu-TTS v3 Turbo's tuned default is 0.8. (The old 1.0 default was tuned for
+    # the v2 GGUF backbone, where lowering it too far made the autoregressive model
+    # emit the END token early and read only part of the line — "đọc không đủ chữ".)
     try:
-        return max(0.05, min(1.5, float(os.getenv("AETHER_VIENEU_TEMPERATURE", "1.0"))))
+        return max(0.05, min(1.5, float(os.getenv("AETHER_VIENEU_TEMPERATURE", "0.8"))))
     except (TypeError, ValueError):
-        return 1.0
+        return 0.8
 
 
 def _vieneu_top_k() -> int:
+    # v3 Turbo's tuned default is 25.
     try:
-        return max(1, min(100, int(os.getenv("AETHER_VIENEU_TOP_K", "50"))))
+        return max(1, min(100, int(os.getenv("AETHER_VIENEU_TOP_K", "25"))))
     except (TypeError, ValueError):
-        return 50
+        return 25
 
 
 def _vieneu_max_context() -> int:
@@ -96,7 +107,7 @@ def _patch_vieneu_max_context() -> None:
 
 
 def preview_asset_stem(voice_id: str) -> str:
-    """ASCII-safe filename stem for a bundled preview clip (e.g. 'Sơn' -> 'vieneu_Son')."""
+    """ASCII-safe filename stem for a bundled preview clip (e.g. 'Thái Sơn' -> 'vieneu_ThaiSon')."""
     norm = unicodedata.normalize("NFKD", voice_id or "")
     ascii_id = "".join(c for c in norm if c.isascii() and (c.isalnum() or c in {"-", "_"}))
     return f"vieneu_{ascii_id or 'voice'}"
@@ -148,12 +159,19 @@ def _get_engine():
 def synthesize_vieneu(text: str, voice_id: str, output: Path) -> Path:
     """Synthesize ``text`` with a VieNeu preset voice into ``output`` (.wav or .mp3)."""
     voice_id = (voice_id or "").strip()
-    if voice_id not in VIENEU_VOICE_IDS:
-        raise RuntimeError(
-            f"Unknown VieNeu voice '{voice_id}'. Available: {sorted(VIENEU_VOICE_IDS)}"
-        )
     engine = _get_engine()
-    voice = engine.get_preset_voice(voice_id)  # precomputed codes -> no torch
+    try:
+        voice = engine.get_preset_voice(voice_id)  # precomputed codes -> no torch
+    except ValueError as exc:
+        # The installed model may not expose this preset id (e.g. the vieneu library
+        # swapped its bundled model and voice names across versions). Degrade to the
+        # model's own default voice instead of failing every cue.
+        logger.warning(
+            "VieNeu preset %r unavailable (%s); falling back to the model's default voice.",
+            voice_id,
+            exc,
+        )
+        voice = engine.get_preset_voice(None)
     audio = engine.infer(
         text, voice=voice, temperature=_vieneu_temperature(), top_k=_vieneu_top_k()
     )

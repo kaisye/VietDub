@@ -378,6 +378,58 @@ def _subtitle_filter(
     return f"subtitles='{normalized}':force_style='{style}'"
 
 
+def prepare_display_subtitle(
+    video_path: Path,
+    subtitle_path: Path,
+    subtitle_style: dict[str, Any] | None = None,
+    max_lines: int = 2,
+) -> Path:
+    """Create the display cues before TTS so voice and subtitles share them."""
+    configured = normalize_subtitle_style(subtitle_style)
+    chars_per_line = _subtitle_chars_per_line(configured, _probe_dimensions(video_path))
+    display_cues: list[tuple[float, float, str]] = []
+    source_cues = _merge_orphan_display_cues(_parse_srt_for_ass(subtitle_path))
+    for cue_start, cue_end, cue_text in source_cues:
+        display_cues.extend(
+            _wrap_cue_for_ass(cue_text, cue_start, cue_end, chars_per_line, max_lines)
+        )
+
+    if not display_cues:
+        return subtitle_path
+
+    destination = subtitle_path.with_name(f"{subtitle_path.stem}.display.srt")
+    blocks = [
+        "\n".join(
+            [str(index), f"{_srt_time(start)} --> {_srt_time(end)}", text]
+        )
+        for index, (start, end, text) in enumerate(display_cues, start=1)
+        if text.strip() and end > start
+    ]
+    destination.write_text("\n\n".join(blocks).strip() + "\n", encoding="utf-8")
+    return destination
+
+
+def _merge_orphan_display_cues(
+    cues: list[tuple[float, float, str]],
+) -> list[tuple[float, float, str]]:
+    merged: list[tuple[float, float, str]] = []
+    for start, end, text in cues:
+        words = text.split()
+        starts_as_continuation = bool(text) and text[0].islower()
+        if (
+            merged
+            and len(words) <= 2
+            and starts_as_continuation
+            and start - merged[-1][1] <= 0.2
+            and not re.search(r"[.!?\u3002\uff01\uff1f]\s*$", merged[-1][2])
+        ):
+            previous_start, _, previous_text = merged[-1]
+            merged[-1] = (previous_start, end, f"{previous_text.rstrip()} {text.lstrip()}")
+            continue
+        merged.append((start, end, text))
+    return merged
+
+
 def _srt_to_ass(
     srt_path: Path,
     configured: dict[str, Any],
@@ -418,9 +470,7 @@ def _srt_to_ass(
     else:
         margin_v = 0
 
-    # Estimated characters per line at this font size in the available width.
-    available_width = max(100, width - margin_l - margin_r)
-    chars_per_line = max(15, int(available_width / max(1, font_size * 0.55)))
+    chars_per_line = _subtitle_chars_per_line(configured, video_size)
 
     # Parse SRT cues.
     srt_cues = _parse_srt_for_ass(srt_path)
@@ -468,6 +518,19 @@ def _srt_to_ass(
     ass_path = srt_path.with_suffix(".render.ass")
     ass_path.write_text("\n".join(ass_lines) + "\n", encoding="utf-8-sig")
     return ass_path
+
+
+def _subtitle_chars_per_line(
+    configured: dict[str, Any],
+    video_size: tuple[int, int],
+) -> int:
+    width, _ = video_size
+    position_x = float(configured["position_x"])
+    font_size = max(8, round(configured["font_size"] * width / 512))
+    margin_l = round(position_x * width) if position_x < 0.45 else 0
+    margin_r = round((1.0 - position_x) * width) if position_x > 0.55 else 0
+    available_width = max(100, width - margin_l - margin_r)
+    return max(15, int(available_width / max(1, font_size * 0.55)))
 
 
 def _parse_srt_for_ass(path: Path) -> list[tuple[float, float, str]]:
@@ -585,6 +648,14 @@ def _ass_time(seconds: float) -> str:
     m, cs = divmod(cs, 6000)
     s, cs = divmod(cs, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _srt_time(seconds: float) -> str:
+    milliseconds = int(round(max(0.0, seconds) * 1000))
+    hours, remainder = divmod(milliseconds, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    secs, millis = divmod(remainder, 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
 
 def _probe_dimensions(path: Path) -> tuple[int, int]:

@@ -4,7 +4,8 @@ These providers scrape public "video downloader" web services and are used only
 as a LAST RESORT when yt-dlp fails (it lags behind Douyin's X-Bogus/A-Bogus
 signature changes). They are:
 
-* Disabled by default. Set ``AETHER_THIRDPARTY_DOWNLOAD_ENABLED=1`` to enable.
+* Enabled by default for public Douyin/TikTok URLs. Set
+  ``AETHER_THIRDPARTY_DOWNLOAD_ENABLED=0`` to disable it.
 * Fail-safe. Any error returns ``None`` so the normal error path is preserved.
 * Fragile by nature. They depend on undocumented HTML/JSON endpoints that can
   change or add Cloudflare challenges at any time. Treat breakage as expected
@@ -45,7 +46,7 @@ _SNAPVIDEOTOOLS_BASE = "https://snapvideotools.com"
 
 
 def thirdparty_fallback_enabled() -> bool:
-    return os.getenv("AETHER_THIRDPARTY_DOWNLOAD_ENABLED", "0").strip().lower() in {
+    return os.getenv("AETHER_THIRDPARTY_DOWNLOAD_ENABLED", "1").strip().lower() in {
         "1",
         "true",
         "on",
@@ -75,7 +76,7 @@ def download_via_thirdparty(url: str, root: Path, job_id: str) -> Path | None:
     raw_dir.mkdir(parents=True, exist_ok=True)
     destination = raw_dir / f"{job_id}.mp4"
 
-    for provider in (_provider_unduhtiktok, _provider_snapvideotools):
+    for provider in (_provider_snapvideotools, _provider_unduhtiktok):
         try:
             _remove_existing(destination)
             if provider(url, destination) and _has_content(destination):

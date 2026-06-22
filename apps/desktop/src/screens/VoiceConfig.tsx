@@ -1948,6 +1948,9 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
           <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--text-secondary)" }}>
             {t.colab_sub}
           </p>
+          <p style={{ margin: "0 0 14px", fontWeight: 600, fontSize: 13, color: "var(--warn)" }}>
+            {t.colab_windows_only}
+          </p>
           {colab ? (
             <ColabStatusPanel
               status={colab}

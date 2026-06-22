@@ -14,7 +14,7 @@ from .services.audio_cues import attach_background_audio, create_audio_cue_manif
 from .services.audio_bed import prepare_background_audio
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
-from .services.renderer import render_video
+from .services.renderer import prepare_display_subtitle, render_video
 from .services.production_configuration import (
     NO_SUBTITLE_STYLE_ID,
     ProductionConfiguration,
@@ -647,6 +647,15 @@ def _continue_after_translation(
         if configuration
         else job.speaker_diarization_enabled
     ) and voice_enabled
+    playback_subtitle_path = translated_subtitle_path
+    if voice_enabled and subtitle_enabled and not speakers_enabled:
+        playback_subtitle_path = prepare_display_subtitle(
+            raw_video_path,
+            translated_subtitle_path,
+            configuration.subtitle.style_snapshot if configuration else None,
+        )
+        if playback_subtitle_path != translated_subtitle_path:
+            _log_artifact(job, playback_subtitle_path)
     provider = configuration.voice.provider if configuration else ""
     if voice_enabled:
         resolved_provider = provider or "runtime default"
@@ -662,7 +671,7 @@ def _continue_after_translation(
             manifest_path = create_audio_cue_manifest(
                 job.id,
                 raw_video_path,
-                translated_subtitle_path,
+                playback_subtitle_path,
                 voice,
                 target_language,
                 voice_rate,
@@ -706,7 +715,7 @@ def _continue_after_translation(
     if voice_enabled:
         with tts_provider_override(provider):
             audio_path = generate_tts(
-                translated_subtitle_path,
+                playback_subtitle_path,
                 voice,
                 target_language,
                 voice_rate,
@@ -746,7 +755,7 @@ def _continue_after_translation(
     output_path = render_video(
         raw_video_path,
         audio_path,
-        translated_subtitle_path if subtitle_enabled else None,
+        playback_subtitle_path if subtitle_enabled else None,
         audio_bed.path,
         render_quality,
         subtitle_style=(

@@ -222,7 +222,8 @@ def _fix_fused_words(text: str) -> str:
     """
     try:
         import wordninja
-    except ImportError:
+    except (ImportError, OSError) as exc:
+        logger.warning("wordninja is unavailable; keeping OCR word spacing unchanged: %s", exc)
         return text
 
     tokens = re.split(r"(\s+)", text)

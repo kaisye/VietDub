@@ -820,12 +820,16 @@ def _fallback_split_semantic_text(text: str, target_chars: int) -> list[str]:
     cursor = 0
     while len(text) - cursor > target_chars:
         target = cursor + target_chars
-        search_start = max(cursor + target_chars // 2, target - target_chars // 3)
-        search_end = min(len(text), target + target_chars // 3)
-        boundary = max(
-            (position + 1 for position in range(search_start, search_end) if text[position] in "，、；：,;:"),
-            default=target,
-        )
+        minimum_part = max(4, target_chars // 4)
+        search_start = cursor + minimum_part
+        search_end = max(search_start, len(text) - minimum_part)
+        punctuation = "\u3001\uff0c\uff1b\uff1a,;:"
+        candidates = [
+            position + 1
+            for position in range(search_start, search_end)
+            if text[position] in punctuation
+        ]
+        boundary = min(candidates, key=lambda position: abs(position - target)) if candidates else target
         parts.append(text[cursor:boundary].strip())
         cursor = boundary
     if cursor < len(text):

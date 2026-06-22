@@ -410,16 +410,34 @@ def _generate_chunked_tts(
     workdir = root / "audio" / f"{subtitle_path.stem}.chunks"
     workdir.mkdir(parents=True, exist_ok=True)
 
-    semantic_cues = _semantic_sentence_cues(_ordered_cues(cues))
+    preserve_cue_boundaries = subtitle_path.name.endswith(".display.srt")
+    semantic_cues = (
+        _ordered_cues(cues)
+        if preserve_cue_boundaries
+        else _semantic_sentence_cues(_ordered_cues(cues))
+    )
 
     if _tts_provider() == "vieneu":
         return _generate_vieneu_timeline_tts(
-            semantic_cues, voice, workdir, output, speech_rate, voice_overrides
+            semantic_cues,
+            voice,
+            workdir,
+            output,
+            speech_rate,
+            voice_overrides,
+            preserve_cue_boundaries=preserve_cue_boundaries,
         )
 
     if _tts_provider() == "edge" and _edge_timeline_fit_enabled():
         return _generate_edge_timeline_tts(
-            semantic_cues, voice, rate, workdir, output, speech_rate, voice_overrides
+            semantic_cues,
+            voice,
+            rate,
+            workdir,
+            output,
+            speech_rate,
+            voice_overrides,
+            preserve_cue_boundaries=preserve_cue_boundaries,
         )
 
     chunks = _chunk_cues_for_tts(semantic_cues)
@@ -499,6 +517,8 @@ def _generate_edge_timeline_tts(
     output: Path,
     speech_rate: SpeechRateProfile | None,
     voice_overrides: VoiceOverrides | None,
+    *,
+    preserve_cue_boundaries: bool = False,
 ) -> Path:
     """Synthesize Edge TTS units in parallel and fit each to the timeline.
 
@@ -507,7 +527,11 @@ def _generate_edge_timeline_tts(
     synthesis time from O(n × latency) down to O(n/concurrency × latency).
     Tempo-fitting (ffmpeg) and the final mix run sequentially after synthesis.
     """
-    units = _edge_timeline_units(semantic_cues)
+    units = (
+        _ordered_cues(semantic_cues)
+        if preserve_cue_boundaries
+        else _edge_timeline_units(semantic_cues)
+    )
     if not units:
         raise RuntimeError("No subtitle cues available for Edge timeline TTS.")
 
@@ -555,6 +579,8 @@ def _generate_vieneu_timeline_tts(
     output: Path,
     speech_rate: SpeechRateProfile | None,
     voice_overrides: VoiceOverrides | None,
+    *,
+    preserve_cue_boundaries: bool = False,
 ) -> Path:
     """Synthesize VieNeu units (CPU, sequential) and fit each to the SRT timeline.
 
@@ -563,7 +589,11 @@ def _generate_vieneu_timeline_tts(
     original timestamps. VieNeu runs locally on CPU, so units are produced one at a
     time rather than via the async fan-out used for the Edge cloud service.
     """
-    units = _edge_timeline_units(semantic_cues)
+    units = (
+        _ordered_cues(semantic_cues)
+        if preserve_cue_boundaries
+        else _edge_timeline_units(semantic_cues)
+    )
     if not units:
         raise RuntimeError("No subtitle cues available for VieNeu timeline TTS.")
 

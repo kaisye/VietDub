@@ -10,7 +10,10 @@ yt-dlp>=2025.12.8
 edge-tts>=7.2.3
 # Offline Vietnamese TTS (CPU, ONNX/GGUF backbone, torch-free) — preset voices
 # served alongside Edge. Voice cloning is intentionally not used (needs torch).
-vieneu>=2.7.0
+# Pinned to the v3-Turbo line: its built-in voice names (VIENEU_PRESETS in
+# services/vieneu_tts.py) are model-specific, and an unpinned upgrade across major
+# versions silently swaps the bundled model and renames every preset id.
+vieneu>=3.0.5,<4
 # Hard-subtitle OCR (CPU): runs the PP-OCR detection/recognition models via
 # ONNXRuntime with models bundled in the wheel — no paddlepaddle, no runtime
 # download. Imported lazily, only when the "ocr" subtitle source is selected.

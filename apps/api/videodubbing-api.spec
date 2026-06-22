@@ -9,7 +9,9 @@ Produces a single `dist/videodubbing-api(.exe)` (one-file build) so it can be
 wired into Tauri's `bundle.externalBin` as a single sidecar binary.
 """
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all, collect_submodules, get_module_file_attribute
 
 datas = []
 binaries = []
@@ -76,6 +78,17 @@ for pkg in (
         hiddenimports += pkg_hidden
     except Exception as exc:  # package may be absent in a slim build
         print(f"[spec] skipping optional package {pkg!r}: {exc}")
+
+# wordninja 2.0 installs as ``wordninja.py`` plus a sibling data directory.
+# Because it is a module rather than a regular package, collect_all() does not
+# reliably discover its frequency dictionary. The module opens this exact path
+# during import, so missing it makes the whole OCR job fail in a one-file build.
+wordninja_module = Path(get_module_file_attribute("wordninja"))
+wordninja_words = wordninja_module.parent / "wordninja" / "wordninja_words.txt.gz"
+if not wordninja_words.is_file():
+    raise RuntimeError(f"Required wordninja dictionary was not found: {wordninja_words}")
+datas.append((str(wordninja_words), "wordninja"))
+hiddenimports.append("wordninja")
 
 
 block_cipher = None
