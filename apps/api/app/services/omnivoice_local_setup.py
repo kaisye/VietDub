@@ -220,11 +220,30 @@ def _materialize_requirements() -> None:
 
 def _find_base_python() -> tuple[list[str] | None, str]:
     """Locate a system Python (>=3.10) able to build a venv. ``None`` if absent."""
-    candidates: list[list[str]] = (
-        [["py", "-3.12"], ["py", "-3"], ["python"]]
-        if os.name == "nt"
-        else [["python3.12"], ["python3"], ["python"]]
-    )
+    system = platform.system()
+    if system == "Darwin":
+        # Apps opened from Finder do not inherit the shell PATH. Check the
+        # standard python.org and Homebrew locations before command names.
+        candidates = [
+            [f"/Library/Frameworks/Python.framework/Versions/{version}/bin/python{version}"]
+            for version in ("3.12", "3.11", "3.10")
+        ]
+        candidates += [
+            [f"{prefix}/python{version}"]
+            for prefix in ("/opt/homebrew/bin", "/usr/local/bin")
+            for version in ("3.12", "3.11", "3.10")
+        ]
+        candidates += [
+            ["/opt/homebrew/bin/python3"],
+            ["/usr/local/bin/python3"],
+            ["python3.12"],
+            ["python3"],
+            ["python"],
+        ]
+    elif os.name == "nt":
+        candidates = [["py", "-3.12"], ["py", "-3"], ["python"]]
+    else:
+        candidates = [["python3.12"], ["python3"], ["python"]]
     # The running interpreter is only usable when it's a real Python — never the
     # PyInstaller-frozen backend exe.
     if not getattr(sys, "frozen", False):
@@ -241,10 +260,19 @@ def _find_base_python() -> tuple[list[str] | None, str]:
             continue
         return cmd, ""
 
-    hint = (
-        "No suitable Python found. Install Python 3.12 from python.org "
-        "(tick 'Add python.exe to PATH' / enable the py launcher), then retry."
-    )
+    if system == "Darwin":
+        hint = (
+            "No suitable Python found. Install Python 3.12 from "
+            "https://www.python.org/downloads/macos/, finish the installer, "
+            "reopen VietDub, then retry."
+        )
+    elif os.name == "nt":
+        hint = (
+            "No suitable Python found. Install Python 3.12 from python.org "
+            "(tick 'Add python.exe to PATH' / enable the py launcher), then retry."
+        )
+    else:
+        hint = "No suitable Python found. Install Python 3.12, then retry."
     return None, f"{hint} [{' | '.join(errors)}]"
 
 
