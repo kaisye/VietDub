@@ -75,9 +75,15 @@ jobs:
           # build still produces installers but cannot emit signed update artifacts.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT scoped only to kaisye/VietDubPublic with
+          # Contents: Read and write. The default GITHUB_TOKEN cannot publish
+          # into a different repository.
+          GITHUB_TOKEN: ${{ secrets.VIETDUB_PUBLIC_RELEASE_TOKEN }}
         with:
           projectPath: apps/desktop
+          owner: kaisye
+          repo: VietDubPublic
+          releaseCommitish: main
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
           releaseName: "VietDub v__VERSION__"
           releaseDraft: true

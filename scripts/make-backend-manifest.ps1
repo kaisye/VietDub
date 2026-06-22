@@ -13,7 +13,7 @@
 
 .EXAMPLE
     ./scripts/make-backend-manifest.ps1 -Version 0.1.0 `
-      -BaseUrl https://github.com/kaisye/VietDub/releases/download/v0.1.0 `
+      -BaseUrl https://github.com/kaisye/VietDubPublic/releases/download/v0.1.7 `
       -WindowsBackend build/backend/dist/videodubbing-api.exe
 #>
 [CmdletBinding()]

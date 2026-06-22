@@ -23,7 +23,7 @@ use crate::managed_tools::{download_file, verify_sha256};
 /// installer is cut from; override at build/run time via VIETDUB_BACKEND_MANIFEST.
 fn manifest_url() -> String {
     std::env::var("VIETDUB_BACKEND_MANIFEST").unwrap_or_else(|_| {
-        "https://github.com/kaisye/VietDub/releases/latest/download/backend-manifest.json"
+        "https://github.com/kaisye/VietDubPublic/releases/latest/download/backend-manifest.json"
             .to_string()
     })
 }
