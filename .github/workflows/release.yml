@@ -49,6 +49,27 @@ jobs:
           node-version: "24.17.0"
           cache: npm
 
+      - name: Validate JSON manifests
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const manifests = [
+            'package.json',
+            'package-lock.json',
+            'apps/desktop/package.json',
+            'apps/desktop/src-tauri/tauri.conf.json',
+          ];
+          for (const path of manifests) {
+            const text = fs.readFileSync(path, 'utf8');
+            if (text.charCodeAt(0) === 0xfeff) {
+              throw new Error(`${path} starts with a UTF-8 BOM`);
+            }
+            JSON.parse(text);
+            console.log(`Valid JSON without BOM: ${path}`);
+          }
+          NODE
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
