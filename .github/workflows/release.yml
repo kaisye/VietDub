@@ -20,8 +20,10 @@ jobs:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
-          # GitHub's xlarge macOS runner is Apple Silicon (may require a paid plan).
-          - platform: macos-14-xlarge
+          # Standard macos-14 runner is Apple Silicon (M1, aarch64): free on
+          # public repos / uses included minutes. The xlarge variant is a paid
+          # larger runner and needs a spending limit, so we avoid it.
+          - platform: macos-14
             target: aarch64-apple-darwin
             bundles: app,dmg
     runs-on: ${{ matrix.platform }}
