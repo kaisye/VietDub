@@ -1005,7 +1005,7 @@ def upload_source_video(file: UploadFile = File(...)) -> SourceVideoUploadOut:
 
     return SourceVideoUploadOut(
         filename=file.filename or safe_name,
-        path=str(destination.relative_to(Path.cwd())).replace("\\", "/"),
+        path=str(destination.resolve()),
         url=f"/storage/source-uploads/{safe_name}",
     )
 
@@ -1043,7 +1043,7 @@ async def download_source_video_preview(
         ) from exc
     return SourceVideoUploadOut(
         filename=resolved.name,
-        path=str(relative).replace("\\", "/"),
+        path=str(resolved),
         url=f"/storage/{relative.as_posix()}",
     )
 
