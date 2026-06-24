@@ -265,7 +265,24 @@ def _find_base_python() -> tuple[list[str] | None, str]:
             ["python"],
         ]
     elif os.name == "nt":
-        candidates = [["py", "-3.12"], ["py", "-3"], ["python"]]
+        # Apps launched from a packaged build / Start menu don't inherit a shell
+        # PATH and often have neither the py launcher nor `python` on PATH. Probe
+        # the common per-user and machine-wide install locations (python.org
+        # installer + Anaconda/Miniconda) before falling back to bare names.
+        candidates = [["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"], ["py", "-3"]]
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        userprofile = os.environ.get("USERPROFILE", "")
+        programdata = os.environ.get("ProgramData", r"C:\ProgramData")
+        for version in ("Python312", "Python311", "Python310", "Python313"):
+            if localappdata:
+                candidates.append(
+                    [os.path.join(localappdata, "Programs", "Python", version, "python.exe")]
+                )
+        for base in (userprofile, programdata):
+            if base:
+                candidates.append([os.path.join(base, "anaconda3", "python.exe")])
+                candidates.append([os.path.join(base, "miniconda3", "python.exe")])
+        candidates.append(["python"])
     else:
         candidates = [["python3.12"], ["python3"], ["python"]]
     # The running interpreter is only usable when it's a real Python — never the
