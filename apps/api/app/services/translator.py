@@ -192,7 +192,7 @@ def _translate_contextual_segments(
 def _contextual_translation_batches(
     cues: list[IndexedSubtitleCue],
 ) -> list[list[IndexedSubtitleCue]]:
-    max_cues = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CUES") or 70
+    max_cues = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CUES") or 150
     max_chars = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CHARS") or 5000
     batches: list[list[IndexedSubtitleCue]] = []
     current: list[IndexedSubtitleCue] = []
@@ -698,8 +698,8 @@ def _normalize_semantic_cues(cues: list[IndexedSubtitleCue], *, is_ocr: bool = F
 
 
 def _semantic_normalization_batches(cues: list[IndexedSubtitleCue]) -> list[list[IndexedSubtitleCue]]:
-    max_cues = _optional_positive_int("AETHER_SEMANTIC_NORMALIZE_BATCH_CUES") or 40
-    max_chars = _optional_positive_int("AETHER_SEMANTIC_NORMALIZE_BATCH_CHARS") or 2000
+    max_cues = _optional_positive_int("AETHER_SEMANTIC_NORMALIZE_BATCH_CUES") or 80
+    max_chars = _optional_positive_int("AETHER_SEMANTIC_NORMALIZE_BATCH_CHARS") or 1000
     batches: list[list[IndexedSubtitleCue]] = []
     current: list[IndexedSubtitleCue] = []
     current_chars = 0
