@@ -971,74 +971,46 @@ def _speech_rate_prompt_section(speech_rate: SpeechRateProfile | None) -> str:
     return speech_rate_translation_hint(speech_rate)
 
 
-def _nvidia_fallback_model() -> str:
-    settings = get_runtime_settings()
-    return (
-        settings.translation_nvidia_model
-        or os.getenv("NVIDIA_MODEL")
-        or "gpt-oss-120b"
-    ).strip() or "gpt-oss-120b"
+# Translation runs exclusively through the local 9router endpoint
+# (OpenAI-compatible, 127.0.0.1:20128). NVIDIA NIM was removed as a translation
+# backend — it needed a cloud API key and returned 404s whenever the key/model
+# drifted. Every message below contains the literal "9router" so the desktop
+# shell can detect a router problem, auto-start the router, and open its
+# dashboard for configuration.
+_ROUTER_UNREACHABLE_MESSAGE = (
+    "Không kết nối được 9router (dịch cục bộ tại 127.0.0.1:20128). "
+    "VietDub đang tự khởi động 9router — mở dashboard để chọn provider và model, "
+    "rồi bấm Thử lại."
+)
+_ROUTER_UNCONFIGURED_MESSAGE = (
+    "9router chưa được cấu hình: cần đăng nhập provider hoặc thêm API key trong "
+    "dashboard 9router (127.0.0.1:20128). Mở dashboard để cấu hình rồi bấm Thử lại."
+)
 
 
 def _request_translation_completion(model: str, system_prompt: str, user_prompt: str) -> str:
-    provider = _translation_provider()
-    if provider == "nvidia":
-        response = _request_nvidia_translation(model, system_prompt, user_prompt)
-    elif provider in {"openai-compatible", "openai_compatible", "local", "ollama", "lmstudio", "vllm"}:
-        try:
-            response = _request_openai_compatible_translation(model, system_prompt, user_prompt)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
-            if _nvidia_api_key():
-                import logging
-                fallback = _nvidia_fallback_model()
-                logging.getLogger(__name__).warning(
-                    "Local translation endpoint unreachable (%s). Falling back to NVIDIA %s.", exc, fallback,
-                )
-                response = _request_nvidia_translation(fallback, system_prompt, user_prompt)
-            else:
-                raise RuntimeError(
-                    f"Local translation endpoint is not reachable and NVIDIA_API_KEY is not configured. "
-                    f"Start your local LLM or add an NVIDIA API key in Settings. Error: {exc}"
-                ) from exc
-    else:
+    """Translate via the local 9router endpoint (OpenAI-compatible).
+
+    9router is the only translation backend. When it is unreachable or not yet
+    configured we raise a clear, actionable error instead of silently falling
+    back to a cloud API — the desktop shell recognises the "9router" marker and
+    brings the router up / opens its dashboard.
+    """
+    try:
+        response = _request_openai_compatible_translation(model, system_prompt, user_prompt)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+        raise RuntimeError(_ROUTER_UNREACHABLE_MESSAGE) from exc
+
+    if response.status_code in (401, 403):
+        raise RuntimeError(_ROUTER_UNCONFIGURED_MESSAGE)
+    if response.status_code == 404:
         raise RuntimeError(
-            "Unsupported AETHER_TRANSLATION_PROVIDER. "
-            "Use 'nvidia' or 'openai-compatible'."
+            f"9router không tìm thấy model dịch '{model}'. Mở dashboard 9router "
+            f"(127.0.0.1:20128) để định tuyến/chọn model rồi bấm Thử lại."
         )
 
     response.raise_for_status()
     return _extract_chat_completion_content(response.json())
-
-
-def _request_nvidia_translation(model: str, system_prompt: str, user_prompt: str) -> httpx.Response:
-    api_key = _nvidia_api_key()
-    if not api_key:
-        raise RuntimeError("NVIDIA_API_KEY is required when AETHER_TRANSLATION_PROVIDER=nvidia.")
-
-    return httpx.post(
-        "https://integrate.api.nvidia.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": _optional_positive_int("AETHER_TRANSLATION_MAX_TOKENS") or 32768,
-            "temperature": 0.2,
-            "top_p": 0.95,
-            "top_k": 20,
-            "presence_penalty": 0,
-            "repetition_penalty": 1,
-            "stream": False,
-            "chat_template_kwargs": {"enable_thinking": False},
-        },
-        timeout=_optional_positive_int("AETHER_TRANSLATION_TIMEOUT_SECONDS") or 300,
-    )
 
 
 def _request_openai_compatible_translation(model: str, system_prompt: str, user_prompt: str) -> httpx.Response:
@@ -1380,21 +1352,21 @@ def _split_srt_blocks(srt_text: str) -> list[str]:
 
 
 def _translation_provider() -> str:
-    settings = get_runtime_settings()
-    return (settings.translation_provider or os.getenv("AETHER_TRANSLATION_PROVIDER", "nvidia")).strip().lower() or "nvidia"
+    """Translation always uses the local 9router endpoint; NVIDIA NIM was removed
+    as a translation backend. Any legacy ``nvidia`` value persisted in
+    runtime-settings.json is ignored."""
+    return "openai-compatible"
 
 
 def _translation_model() -> str:
     settings = get_runtime_settings()
-    if _translation_provider() == "nvidia":
-        return (settings.translation_nvidia_model or os.getenv("NVIDIA_MODEL", "gpt-oss-120b")).strip() or "gpt-oss-120b"
     return (
         settings.local_translation_model
         or os.getenv("AETHER_LOCAL_TRANSLATION_MODEL")
         or os.getenv("LOCAL_TRANSLATION_MODEL")
         or os.getenv("OLLAMA_TRANSLATION_MODEL")
-        or "qwen2.5:14b"
-    ).strip()
+        or "translate"
+    ).strip() or "translate"
 
 
 def _local_translation_chat_url() -> str:
@@ -1435,13 +1407,6 @@ def _same_language(source_language: str | None, target_language: str | None) -> 
 
 def _language_key(language: str | None) -> str:
     return (language or "").strip().lower().split("-")[0]
-
-
-def _nvidia_api_key() -> str | None:
-    api_key = (os.getenv("NVIDIA_API_KEY") or "").strip().strip('"').strip("'")
-    if api_key.lower().startswith("bearer "):
-        api_key = api_key[7:].strip()
-    return api_key or None
 
 
 def _optional_positive_int(name: str) -> int | None:

@@ -171,14 +171,12 @@ export default function FeaturesScreen() {
   const ttsBadge = isOmniVoice ? "OmniVoice" : isVieneu ? "VieNeu" : "Edge TTS";
 
   const hasNvidiaKey = settings.nvidia_api_key_configured;
-  const translationProvider = settings.translation_provider || "nvidia";
+  // Translation is 9router-only now; NVIDIA NIM was removed as a translation backend.
   const translationModel =
-    translationProvider === "nvidia"
-      ? settings.translation_nvidia_model || "nvidia/chatgpt-oss-120b"
-      : settings.local_translation_model || settings.local_translation_base_url;
-  const translationIsNvidia = translationProvider === "nvidia";
-  const transStatus: Status = translationIsNvidia ? (hasNvidiaKey ? "ok" : "warn") : "ok";
+    settings.local_translation_model || settings.local_translation_base_url || "translate";
+  const transStatus: Status = "ok";
 
+  // NVIDIA NIM (when a key is configured) now powers speech-to-text only.
   const nvidiaStatus: Status = hasNvidiaKey ? "ok" : "off";
 
   // ── labels ──────────────────────────────────────────────────────────────
@@ -363,41 +361,28 @@ export default function FeaturesScreen() {
           <FeatureCard
             title={isVI ? "Dịch thuật (LLM)" : "Translation (LLM)"}
             status={transStatus}
-            badge={
-              transStatus === "ok"
-                ? L.active
-                : isVI
-                ? "Thiếu API key"
-                : "Missing API key"
-            }
+            badge="9router"
           >
-            <ControlRow label={isVI ? "Chọn nhà cung cấp" : "Select provider"}>
-              <select
-                value={translationIsNvidia ? "nvidia" : "openai-compatible"}
-                disabled={saving}
-                onChange={(e) => void applyPatch({ translation_provider: e.target.value })}
-              >
-                <option value="nvidia">NVIDIA NIM (chatgpt-oss-120b)</option>
-                <option value="openai-compatible">{isVI ? "LLM cục bộ (9router)" : "Local LLM (9router)"}</option>
-              </select>
-            </ControlRow>
-            <Row label="Model" value={translationModel} status={transStatus} />
-            {translationIsNvidia && (
-              <Row
-                label="API Key"
-                value={hasNvidiaKey ? L.yes : L.notConfigured}
-                status={hasNvidiaKey ? "ok" : "warn"}
-              />
-            )}
             <Row
-              label={isVI ? "Mặc định" : "Default"}
-              value="nvidia/chatgpt-oss-120b"
+              label={isVI ? "Nhà cung cấp" : "Provider"}
+              value={isVI ? "9router · LLM cục bộ" : "9router · local LLM"}
+              status="ok"
+            />
+            <Row
+              label="Base URL"
+              value={settings.local_translation_base_url || "http://127.0.0.1:20128/v1"}
+              status="ok"
+            />
+            <Row label="Model" value={translationModel} status={transStatus} />
+            <Row
+              label={isVI ? "Cấu hình" : "Configure"}
+              value={isVI ? "Dashboard 9router · 127.0.0.1:20128" : "9router dashboard · 127.0.0.1:20128"}
               status="ok"
             />
           </FeatureCard>
         </Section>
 
-        {/* NVIDIA NIM */}
+        {/* NVIDIA NIM — speech-to-text only (translation moved to 9router) */}
         <Section>
           <FeatureCard
             title="NVIDIA NIM"
@@ -410,51 +395,24 @@ export default function FeaturesScreen() {
               status={nvidiaStatus}
             />
             <Row
-              label={isVI ? "Dịch thuật" : "Translation"}
-              value={hasNvidiaKey ? `nvidia/chatgpt-oss-120b` : L.notConfigured}
-              status={nvidiaStatus}
-            />
-            <Row
-              label={isVI ? "Mở khóa thêm" : "Also unlocks"}
+              label={isVI ? "Nhận dạng giọng nói" : "Speech-to-Text"}
               value={
                 hasNvidiaKey
                   ? isVI
-                    ? "Glossary-aware translation · Context injection"
-                    : "Glossary-aware translation · Context injection"
-                  : isVI
-                  ? "Thêm API key NVIDIA để mở khóa"
-                  : "Add NVIDIA API key to unlock"
+                    ? "Phiên âm qua NVIDIA Riva"
+                    : "Transcription via NVIDIA Riva"
+                  : L.notConfigured
               }
               status={nvidiaStatus}
             />
-          </FeatureCard>
-
-          {/* 9router / Local LLM */}
-          <FeatureCard
-            title={isVI ? "LLM cục bộ (9router / Ollama)" : "Local LLM (9router / Ollama)"}
-            status={!translationIsNvidia ? "ok" : "off"}
-            badge={!translationIsNvidia ? L.active : L.inactive}
-          >
             <Row
-              label="Base URL"
-              value={settings.local_translation_base_url || "http://127.0.0.1:20128/v1"}
-              status={!translationIsNvidia ? "ok" : "off"}
-            />
-            <Row
-              label="Model"
-              value={settings.local_translation_model || "qwen2.5:14b"}
-              status={!translationIsNvidia ? "ok" : "off"}
-            />
-            <Row
-              label={isVI ? "Trạng thái" : "Status"}
+              label={isVI ? "Ghi chú" : "Note"}
               value={
-                !translationIsNvidia
-                  ? L.active
-                  : isVI
-                  ? "Có thể dùng — đổi provider trong Settings"
-                  : "Available — switch provider in Settings"
+                isVI
+                  ? "Dịch thuật đã chuyển hẳn sang 9router"
+                  : "Translation now runs through 9router"
               }
-              status={!translationIsNvidia ? "ok" : "off"}
+              status="ok"
             />
           </FeatureCard>
         </Section>

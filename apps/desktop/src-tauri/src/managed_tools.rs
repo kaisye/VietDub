@@ -247,6 +247,23 @@ fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
     ))
 }
 
+/// Best-effort background start used at app launch. Translation depends on the
+/// router, so bringing it up before the first job avoids a "translate failed"
+/// round-trip. Silently does nothing when 9router is not installed yet (the
+/// in-app setup / job-recovery path handles installation) or already running.
+pub fn autostart_managed_9router(data_dir: &Path) {
+    let tools_dir = data_dir.join("tools");
+    if !managed_node_executable(&tools_dir).exists() || !router_server(&tools_dir).exists() {
+        return; // not installed — nothing to start
+    }
+    if managed_9router_ready() {
+        return; // already up
+    }
+    if let Err(err) = start_managed_9router(data_dir) {
+        eprintln!("[desktop] 9router auto-start skipped: {err}");
+    }
+}
+
 fn router_log_summary(log_path: &Path) -> String {
     let location = format!("Log: {}", log_path.display());
     let Ok(contents) = std::fs::read_to_string(log_path) else {

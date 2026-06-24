@@ -1,7 +1,35 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getVoiceOptions, outputUrl, retryJob, revealJob } from "../api";
 import type { Job, RuntimeOptions, RuntimeSettings, VoiceProfile } from "../types";
 import { useT } from "../i18n";
+import { openUrl } from "../lib/open-url";
+
+const ROUTER_DASHBOARD = "http://127.0.0.1:20128/dashboard";
+
+// Translation runs only through the local 9router endpoint, so backend
+// translate errors carry the literal "9router" marker (see translator.py).
+function isRouterProblem(message: string | null | undefined): boolean {
+  return /9router/i.test(message || "");
+}
+
+// Make sure 9router is up: reuse the running instance, start it if installed but
+// stopped, otherwise npm-install it (1-2 min) then start. Throws on real failure.
+async function ensureRouter(): Promise<void> {
+  try {
+    if (await invoke<boolean>("status_9router")) return; // already running
+  } catch {
+    /* status probe failed — fall through to start */
+  }
+  try {
+    await invoke("start_9router");
+    return;
+  } catch {
+    /* not installed yet — install then start */
+  }
+  await invoke("install_9router");
+  await invoke("start_9router");
+}
 
 const ACTIVE = new Set([
   "queued",
@@ -90,14 +118,11 @@ function engineLabel(
       return isVI ? "Phụ đề có sẵn" : "Existing subs";
     }
     case "translating": {
-      if (!settings) return "";
-      const model =
-        settings.translation_provider === "nvidia"
-          ? settings.translation_nvidia_model
-          : settings.local_translation_model;
-      const provider = settings.translation_provider === "nvidia" ? "NVIDIA" : "Local";
-      const short = (model || "").split("/").pop() || provider;
-      return `${provider} · ${short}`;
+      // Translation always runs through the local 9router endpoint.
+      if (!settings) return "9router";
+      const model = settings.local_translation_model || "translate";
+      const short = (model || "").split("/").pop() || "translate";
+      return `9router · ${short}`;
     }
     case "tts_generating": {
       if (job.voice === "none") return isVI ? "Tắt giọng" : "No voice";
@@ -424,10 +449,13 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [revealing, setRevealing] = useState(false);
   const [pollKey, setPollKey] = useState(0);
   const timer = useRef<number | null>(null);
+  // Auto-recovery (start 9router + open dashboard) runs at most once per failure.
+  const recoverAttempted = useRef(false);
   const prevJobRef = useRef<Job | null>(null);
   // Re-renders the live elapsed counter while the job is active. The final
   // "completed in" duration is derived from persisted job timestamps, not this.
@@ -477,6 +505,19 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
     return () => window.clearInterval(id);
   }, [job?.status]);
 
+  // When a job fails because the local router is down/unconfigured, auto-start
+  // 9router and open its dashboard once so the user can configure it right away.
+  useEffect(() => {
+    if (!job || job.status !== "failed") {
+      recoverAttempted.current = false;
+      return;
+    }
+    if (recoverAttempted.current || !isRouterProblem(job.error_message)) return;
+    recoverAttempted.current = true;
+    void prepareRouter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.status, job?.error_message]);
+
   async function retry() {
     setRetrying(true);
     setError("");
@@ -487,6 +528,48 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
       setError(e instanceof Error ? e.message : t.progress_retry_fail);
     } finally {
       setRetrying(false);
+    }
+  }
+
+  // Bring 9router up and open its dashboard so the user can pick a provider/model.
+  // Does NOT auto-retry — translation needs a configured model first.
+  async function prepareRouter() {
+    const isVI = t.nav_create === "Tạo video";
+    setRecovering(true);
+    setError("");
+    try {
+      await ensureRouter();
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : isVI
+            ? "Không thể khởi động 9router."
+            : "Could not start 9router.",
+      );
+    } finally {
+      // Open the dashboard even if start failed, so the user can act on it.
+      await openUrl(ROUTER_DASHBOARD).catch(() => undefined);
+      setRecovering(false);
+    }
+  }
+
+  // Manual recovery button: ensure the router is up, open the dashboard, retry.
+  async function recoverAndRetry() {
+    const isVI = t.nav_create === "Tạo video";
+    setRecovering(true);
+    setError("");
+    try {
+      await ensureRouter();
+      await openUrl(ROUTER_DASHBOARD).catch(() => undefined);
+      await retryJob(jobId);
+      setPollKey((k) => k + 1);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : isVI ? "Không thể khởi động 9router." : "Could not start 9router.",
+      );
+    } finally {
+      setRecovering(false);
     }
   }
 
@@ -710,11 +793,37 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
         <div className="card">
           <div className="banner err">{job.error_message || t.progress_failed}</div>
           {logsTail ? <pre className="logbox" style={{ marginTop: 10 }}>{logsTail}</pre> : null}
-          <div className="actions" style={{ marginTop: 12 }}>
-            <button className="btn primary" disabled={retrying} onClick={() => void retry()}>
-              {retrying ? t.progress_retrying : t.progress_retry_btn}
-            </button>
-          </div>
+          {isRouterProblem(job.error_message) ? (
+            <>
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                {isVI
+                  ? "Dịch thuật chạy qua 9router (cục bộ). VietDub đang tự khởi động 9router và mở dashboard — hãy chọn provider/model rồi bấm Thử lại."
+                  : "Translation runs through 9router (local). VietDub is starting 9router and opening its dashboard — pick a provider/model, then retry."}
+              </p>
+              <div className="actions" style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="btn" disabled={recovering} onClick={() => void prepareRouter()}>
+                  {recovering
+                    ? isVI ? "Đang khởi động 9router…" : "Starting 9router…"
+                    : isVI ? "Mở dashboard 9router" : "Open 9router dashboard"}
+                </button>
+                <button
+                  className="btn primary"
+                  disabled={retrying || recovering}
+                  onClick={() => void recoverAndRetry()}
+                >
+                  {retrying || recovering
+                    ? t.progress_retrying
+                    : isVI ? "Khởi động 9router & Thử lại" : "Start 9router & retry"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="actions" style={{ marginTop: 12 }}>
+              <button className="btn primary" disabled={retrying} onClick={() => void retry()}>
+                {retrying ? t.progress_retrying : t.progress_retry_btn}
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
 

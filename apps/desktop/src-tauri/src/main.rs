@@ -406,6 +406,16 @@ fn main() {
             let child = spawn_backend(app.handle());
             let state: State<BackendProcess> = app.state();
             *state.0.lock().unwrap() = child;
+
+            // Bring the local translation router (9router) up in the background so
+            // the translate stage finds it ready. Best-effort and detached — it
+            // never blocks window creation, and does nothing when 9router is not
+            // installed yet.
+            if let Ok(data_dir) = app.handle().path().app_local_data_dir() {
+                std::thread::spawn(move || {
+                    managed_tools::autostart_managed_9router(&data_dir);
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
