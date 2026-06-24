@@ -196,6 +196,27 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
         }
     }
 
+    // Capture the sidecar's stdout/stderr to a log file. The packaged app has no
+    // console, so a backend that crashes or stalls on startup (missing native
+    // lib, slow one-file self-extraction, import error) otherwise leaves no
+    // trace and just looks like "connection failed". Testers can send this file
+    // to pinpoint why the backend never bound its port.
+    let log_path = data_dir.join("backend.log");
+    match std::fs::File::create(&log_path) {
+        Ok(out) => match out.try_clone() {
+            Ok(err) => {
+                command.stdout(std::process::Stdio::from(out));
+                command.stderr(std::process::Stdio::from(err));
+                eprintln!("[desktop] Backend log -> {}", log_path.display());
+            }
+            Err(e) => eprintln!("[desktop] Could not duplicate backend log handle: {e}"),
+        },
+        Err(e) => eprintln!(
+            "[desktop] Could not create backend log {}: {e}",
+            log_path.display()
+        ),
+    }
+
     match command.spawn() {
         Ok(child) => {
             eprintln!("[desktop] FastAPI backend started on 127.0.0.1:{port}.");

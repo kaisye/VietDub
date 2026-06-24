@@ -22,6 +22,15 @@ const SETUP_SEEN_KEY = "vd.setup.seen";
 
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
+// The packaged backend is a one-file PyInstaller bundle that self-extracts on
+// every launch; with the bundled OCR/VieNeu native libs it can take well over
+// 20s to come up on a cold first launch (macOS also scans the freshly extracted
+// payload). Give it a generous budget so a slow start isn't reported as a
+// failure. Keep the displayed timeout in sync with these constants.
+const CONNECT_ATTEMPTS = 90;
+const CONNECT_INTERVAL_MS = 1000;
+const CONNECT_TIMEOUT_SECONDS = Math.round((CONNECT_ATTEMPTS * CONNECT_INTERVAL_MS) / 1000);
+
 export function loadDefaults(): ToolDefaults {
   try {
     const raw = localStorage.getItem(DEFAULTS_KEY);
@@ -57,8 +66,8 @@ function AppInner() {
   const connectBackend = useCallback(async () => {
     setBackendReady(null);
     setConnectAttempt(0);
-    const ok = await pingWithRetry(20, 1000, (remaining) =>
-      setConnectAttempt(20 - remaining + 1),
+    const ok = await pingWithRetry(CONNECT_ATTEMPTS, CONNECT_INTERVAL_MS, (remaining) =>
+      setConnectAttempt(CONNECT_ATTEMPTS - remaining + 1),
     );
     setBackendReady(ok);
     if (!ok) return;
@@ -189,6 +198,11 @@ function AppInner() {
             <div className="connecting">
               <div className="spinner" />
               <p>{tt(t.connecting_count, { n: connectAttempt })}</p>
+              <p className="muted" style={{ fontSize: "0.85rem" }}>
+                {lang === "vi"
+                  ? "Lần mở đầu tiên có thể mất 1–2 phút khi backend khởi tạo."
+                  : "First launch may take 1–2 minutes while the backend initializes."}
+              </p>
             </div>
           </div>
         ) : backendReady === false ? (
@@ -196,7 +210,9 @@ function AppInner() {
             <div className="banner err">
               {t.backend_not_found}{" "}
               <span className="mono">{API_BASE_URL}</span>{" "}
-              {lang === "vi" ? "sau 20 giây." : "after 20 seconds."}
+              {lang === "vi"
+                ? `sau ${CONNECT_TIMEOUT_SECONDS} giây.`
+                : `after ${CONNECT_TIMEOUT_SECONDS} seconds.`}
             </div>
             <div className="backend-help card">
               <p><strong>{t.backend_help_title}</strong></p>

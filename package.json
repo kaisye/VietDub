@@ -1,7 +1,7 @@
 {
   "name": "videodubbing",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.1.13",
   "scripts": {
     "dev:api": "python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8386 --app-dir apps/api",
     "test:api": "pytest apps/api/tests",
