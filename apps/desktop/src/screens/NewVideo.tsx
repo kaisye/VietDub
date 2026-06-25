@@ -1,6 +1,5 @@
 import {
   Check,
-  ChevronDown,
   Download,
   FileVideo,
   Link2,
@@ -785,6 +784,23 @@ function VoiceDesignBuilder({
   );
 }
 
+// Engine grouping for the voice grid. Edge + NGHI-TTS share the lightweight
+// "Edge TTS" tier (CPU, no GPU); everything else (bundled OmniVoice clones and
+// custom reference voices) lives under "OmniVoice" (GPU/Colab, voice cloning).
+// Each tier gets its own accent colour so the two read apart at a glance.
+type VoiceGroupKey = "edge" | "omnivoice";
+
+function voiceGroupKey(voice: VoiceProfile): VoiceGroupKey {
+  return voice.engine === "edge" || voice.engine === "nghitts" ? "edge" : "omnivoice";
+}
+
+const VOICE_GROUP_ACCENT: Record<VoiceGroupKey, { accent: string; soft: string; ink: string }> = {
+  edge: { accent: "var(--info)", soft: "var(--info-soft)", ink: "var(--info)" },
+  omnivoice: { accent: "var(--primary)", soft: "var(--primary-soft)", ink: "var(--primary-ink)" },
+};
+
+const VOICE_GRID_COLS = "grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(190px,1fr))]";
+
 function VoicePicker({
   voices,
   value,
@@ -797,21 +813,10 @@ function VoicePicker({
   onSelect: (voiceId: string) => void;
 }) {
   const { t } = useT();
-  const [open, setOpen] = useState(false);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const selected = voices.find((item) => item.id === value);
 
   useEffect(() => () => audioRef.current?.pause(), []);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
 
   function preview(voiceId: string) {
     if (voiceId === "none") return;
@@ -824,65 +829,115 @@ function VoicePicker({
     void audio.play().catch(() => setPreviewingId(null));
   }
 
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-input)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-sm"
+  const noneVoice = voices.find((item) => item.id === "none");
+  const edgeVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "edge");
+  const omniVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "omnivoice");
+
+  const renderCard = (voice: VoiceProfile, group: VoiceGroupKey) => {
+    const selected = voice.id === value;
+    const accent = VOICE_GROUP_ACCENT[group];
+    return (
+      <div
+        key={voice.id}
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        onClick={() => onSelect(voice.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(voice.id);
+          }
+        }}
+        className="relative flex cursor-pointer flex-col gap-0.5 rounded-[var(--radius-panel-sm)] p-3 pr-12 transition-colors"
+        style={{
+          border: `${selected ? 2 : 1}px solid ${selected ? accent.accent : "var(--border)"}`,
+          background: selected ? accent.soft : "var(--surface)",
+        }}
       >
-        <span className="min-w-0 truncate">
-          {selected
-            ? `${selected.name} / ${selected.locale} / ${selected.type}`
-            : t.voice_field_label}
-        </span>
-        <ChevronDown size={16} className="shrink-0 opacity-60" />
-      </button>
-      {open ? (
-        <div className="absolute z-30 mt-1 max-h-72 w-full overflow-auto rounded-[var(--radius-input)] border border-[var(--border)] bg-[var(--surface)] shadow-lg">
-          {voices.map((item) => (
-            <div
-              key={item.id}
-              className={`flex items-center gap-2 px-3 py-2 ${
-                item.id === value ? "bg-[var(--surface-muted)]" : "hover:bg-[var(--surface-muted)]"
-              }`}
-            >
-              <button
-                type="button"
-                className="min-w-0 flex-1 text-left"
-                onClick={() => {
-                  onSelect(item.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="block truncate text-sm">
-                  {item.name}
-                  {item.id === defaultVoiceId ? " ★" : ""}
-                </span>
-                <span className="block truncate text-xs text-[var(--text-secondary)]">
-                  {item.type} / {item.locale}
-                </span>
-              </button>
-              {item.id !== "none" ? (
-                <button
-                  type="button"
-                  aria-label={t.voice_play_aria}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] text-white"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    preview(item.id);
-                  }}
-                >
-                  {previewingId === item.id ? (
-                    <Volume2 className="animate-pulse" size={14} />
-                  ) : (
-                    <Play size={14} />
-                  )}
-                </button>
-              ) : null}
-            </div>
-          ))}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {selected ? <Check size={14} strokeWidth={3} color={accent.ink} className="shrink-0" /> : null}
+          <span
+            className="truncate text-sm font-semibold"
+            style={{ color: selected ? accent.ink : "var(--text-primary)" }}
+            title={voice.name}
+          >
+            {voice.name}
+          </span>
+          {voice.id === defaultVoiceId ? (
+            <span className="shrink-0 text-xs" style={{ color: accent.accent }}>★</span>
+          ) : null}
         </div>
+        <span
+          className="truncate text-xs text-[var(--text-secondary)]"
+          title={`${voice.type} · ${voice.locale}`}
+        >
+          {voice.type} · {voice.locale}
+        </span>
+        <button
+          type="button"
+          aria-label={t.voice_play_aria}
+          className="absolute right-2.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-white"
+          style={{ background: accent.accent }}
+          onClick={(event) => {
+            event.stopPropagation();
+            preview(voice.id);
+          }}
+        >
+          {previewingId === voice.id ? <Volume2 className="animate-pulse" size={14} /> : <Play size={14} />}
+        </button>
+      </div>
+    );
+  };
+
+  const renderGroupHeader = (group: VoiceGroupKey, title: string, note: string) => {
+    const accent = VOICE_GROUP_ACCENT[group];
+    return (
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: accent.ink }}>
+          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: accent.accent }} />
+          {title}
+        </span>
+        <span className="text-xs text-[var(--text-secondary)]">{note}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      {edgeVoices.length ? (
+        <div className="space-y-2">
+          {renderGroupHeader("edge", t.voice_group_edge_title, t.voice_group_edge_note)}
+          <div className={VOICE_GRID_COLS}>{edgeVoices.map((voice) => renderCard(voice, "edge"))}</div>
+        </div>
+      ) : null}
+
+      {omniVoices.length ? (
+        <div className="space-y-2">
+          {renderGroupHeader("omnivoice", t.voice_group_omni_title, t.voice_group_omni_note)}
+          <div className={VOICE_GRID_COLS}>{omniVoices.map((voice) => renderCard(voice, "omnivoice"))}</div>
+        </div>
+      ) : null}
+
+      {noneVoice ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect(noneVoice.id);
+          }}
+          className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-panel-sm)] p-3 text-left text-sm transition-colors"
+          style={{
+            border: `${value === "none" ? 2 : 1}px solid ${value === "none" ? "var(--border-strong)" : "var(--border)"}`,
+            background: value === "none" ? "var(--surface-muted)" : "var(--surface)",
+          }}
+        >
+          <span className="min-w-0">
+            <strong className="block">{t.voice_group_none_title}</strong>
+            <span className="block text-xs text-[var(--text-secondary)]">{t.voice_none_desc}</span>
+          </span>
+          {value === "none" ? <Check size={16} className="shrink-0 text-[var(--text-secondary)]" /> : null}
+        </button>
       ) : null}
     </div>
   );
@@ -940,9 +995,12 @@ function VoiceStep({
     <div>
       <EditorSection title={t.voice_delivery_title} description={t.voice_delivery_desc}>
         <div className="space-y-5">
-          <Field label={t.voice_field_label}>
+          {/* Not a <Field>: a <label> would forward every in-grid click to its
+              first control, hijacking card selection. Use a plain labelled block. */}
+          <div className="grid min-w-0 gap-2">
+            <span className="text-sm font-bold text-[var(--text-primary)]">{t.voice_field_label}</span>
             <VoicePicker
-              voices={orderedVoices}
+              voices={voiceProfiles}
               value={voice.voice_id}
               defaultVoiceId={defaultVoiceId}
               onSelect={(voice_id) => {
@@ -954,7 +1012,7 @@ function VoiceStep({
                 });
               }}
             />
-          </Field>
+          </div>
           {voiceLibraryError ? (
             <InlineNotice title={t.voice_lib_err_title} tone="warning">
               {t.voice_lib_err_body} {voiceLibraryError}

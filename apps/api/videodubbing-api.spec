@@ -30,7 +30,7 @@ datas += [
     ("app/assets/omnivoice_service.py", "app/assets"),
     ("app/assets/omnivoice-requirements.txt", "app/assets"),
     # The user's distributable voice setup: the default OmniVoice reference clip
-    # (Voice_Ref.WAV + scripts/instruction) and the VieNeu preset previews served
+    # (Voice_Ref.WAV + scripts/instruction) and the NGHI-TTS preset previews served
     # by /voice-options/{id}/preview. Bundled so the packaged app ships with the
     # configured default voice and instant previews.
     ("app/assets/defaults", "app/assets/defaults"),
@@ -68,8 +68,11 @@ for pkg in (
     "rapidocr_onnxruntime",
     "onnxruntime",
     "cv2",
-    "vieneu",
     "wordninja",
+    # NGHI-TTS: piper-tts ships espeakbridge.pyd + espeak-ng-data; vietnormalizer is
+    # pure-python. collect_all grabs the native lib and bundled espeak data.
+    "piper",
+    "vietnormalizer",
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)

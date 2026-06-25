@@ -11,8 +11,8 @@ Notable runtime components include:
 - FFmpeg binaries supplied by `ffmpeg-static` / `ffprobe-static`. The selected
   FFmpeg build includes GPL components such as libx264 and libmp3lame; distributors
   must satisfy the corresponding GPL source and notice obligations.
-- RapidOCR/ONNX Runtime and VieNeu, downloaded Python dependencies governed by
-  their own package licenses.
+- RapidOCR/ONNX Runtime, downloaded Python dependencies governed by their own
+  package licenses.
 - Node.js, downloaded on demand from nodejs.org under the Node.js license.
 - Python 3.12 standalone runtime, downloaded on demand from
   `astral-sh/python-build-standalone`, governed by the Python Software Foundation

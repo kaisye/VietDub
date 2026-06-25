@@ -89,7 +89,6 @@ API key chỉ được lưu trong thư mục dữ liệu người dùng. Không 
 ### Giọng đọc
 
 - **Edge TTS**: dùng ngay, không cần GPU hay model cục bộ.
-- **VieNeu**: model được tải vào cache người dùng ở lần sử dụng đầu.
 - **OmniVoice Colab/remote**: nhập URL và key của dịch vụ trong cấu hình giọng.
 - **OmniVoice local**: chọn cài runtime. VietDub tạo venv riêng trong app-data rồi
   tải PyTorch/model phù hợp. Máy Mac dùng MPS; Windows ưu tiên NVIDIA CUDA và có
@@ -229,7 +228,7 @@ xóa `storage` nếu muốn giữ job.
 
 ### Model tải chậm hoặc hết dung lượng
 
-VieNeu, OmniVoice và PyTorch không nằm trong installer. Đảm bảo ổ đĩa còn trống
+OmniVoice và PyTorch không nằm trong installer. Đảm bảo ổ đĩa còn trống
 và không đóng app trong lần tải đầu. Edge TTS là lựa chọn nhẹ để kiểm tra nhanh.
 
 ### Render còn giọng gốc

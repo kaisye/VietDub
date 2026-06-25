@@ -11,10 +11,10 @@ $deniedNames = @(
 $deniedExtensions = @(".db", ".sqlite", ".sqlite3", ".wav", ".mp3", ".flac")
 $binaryExtensions = @(".png", ".ico", ".icns", ".exe", ".dmg", ".zip", ".tgz", ".wav", ".mp3", ".flac")
 
-# Intentionally bundled voice assets: the default OmniVoice reference and the
-# VieNeu preset previews under apps/api/app/assets/. These are the user's own
-# distributable voice setup, so the personal-file/extension denials are waived
-# for this directory only — every other location still rejects them.
+# Intentionally bundled voice assets: the default OmniVoice reference under
+# apps/api/app/assets/. These are the user's own distributable voice setup, so
+# the personal-file/extension denials are waived for this directory only — every
+# other location still rejects them.
 $assetsDir = [IO.Path]::GetFullPath((Join-Path $root "apps/api/app/assets"))
 $allowedAssetNames = @("Voice_Ref.WAV", "voice_scripts.txt", "Instruction.txt")
 $allowedAssetExtensions = @(".wav", ".mp3")

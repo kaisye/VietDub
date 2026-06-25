@@ -1873,11 +1873,15 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
-          <Field label={t.engine_tts_provider} hint={settings.tts_provider === "vieneu" ? t.tts_vieneu_hint : undefined}>
+          <Field label={t.engine_tts_provider} hint={settings.tts_provider === "nghitts" ? t.tts_nghitts_hint : undefined}>
             <select value={settings.tts_provider} onChange={(e) => patch("tts_provider", e.target.value)}>
-              <option value="omnivoice">{t.tts_omnivoice}</option>
-              <option value="vieneu">{t.tts_vieneu}</option>
-              <option value="edge">{t.tts_edge}</option>
+              <optgroup label={t.tts_group_edge}>
+                <option value="edge">{t.tts_edge}</option>
+                <option value="nghitts">{t.tts_nghitts}</option>
+              </optgroup>
+              <optgroup label={t.tts_group_omnivoice}>
+                <option value="omnivoice">{t.tts_omnivoice}</option>
+              </optgroup>
             </select>
           </Field>
 

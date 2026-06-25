@@ -23,7 +23,7 @@ const SETUP_SEEN_KEY = "vd.setup.seen";
 const CONTACT_EMAIL = "vietdub.contact@gmail.com";
 
 // The packaged backend is a one-file PyInstaller bundle that self-extracts on
-// every launch; with the bundled OCR/VieNeu native libs it can take well over
+// every launch; with the bundled OCR native libs it can take well over
 // 20s to come up on a cold first launch (macOS also scans the freshly extracted
 // payload). Give it a generous budget so a slow start isn't reported as a
 // failure. Keep the displayed timeout in sync with these constants.

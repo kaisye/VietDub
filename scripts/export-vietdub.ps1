@@ -69,9 +69,9 @@ try {
     Copy-Item -LiteralPath (Join-Path $source "packaging/.env.example") -Destination (Join-Path $staging ".env.example")
     Copy-Item -LiteralPath (Join-Path $source "packaging/README.distribution.md") -Destination (Join-Path $staging "README.md")
 
-    # Voice assets under apps/api/app/assets (the OmniVoice default reference and
-    # VieNeu preset previews) are intentionally retained — they are the user's
-    # own distributable voice setup. scan-distribution.ps1 allowlists them.
+    # Voice assets under apps/api/app/assets (the OmniVoice default reference) are
+    # intentionally retained — they are the user's own distributable voice setup.
+    # scan-distribution.ps1 allowlists them.
     Get-ChildItem $staging -Directory -Recurse -Force |
         Where-Object { $_.Name -in @("__pycache__", ".pytest_cache") } |
         Sort-Object FullName -Descending |

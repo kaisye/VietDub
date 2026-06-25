@@ -50,8 +50,12 @@ def get_runtime_settings() -> RuntimeSettings:
         configured_runtime = "colab" if configured_url and not _is_local_url(configured_url) else "auto"
     if configured_runtime != "colab":
         configured_url = LOCAL_OMNIVOICE_URL
+    # VieNeu was removed as a TTS provider; migrate any persisted selection to Edge.
+    tts_provider = str(data.get("tts_provider") or os.getenv("AETHER_TTS_PROVIDER", "edge")).strip().lower()
+    if tts_provider == "vieneu":
+        tts_provider = "edge"
     return RuntimeSettings(
-        tts_provider=str(data.get("tts_provider") or os.getenv("AETHER_TTS_PROVIDER", "edge")).strip().lower(),
+        tts_provider=tts_provider,
         prefer_local_gpu=_coerce_bool(
             data.get("prefer_local_gpu"),
             os.getenv("AETHER_PREFER_LOCAL_GPU"),
@@ -132,7 +136,7 @@ def update_runtime_settings(values: dict[str, Any]) -> RuntimeSettings:
     # Changing the OmniVoice runtime implies the OmniVoice provider — but only when
     # the caller didn't also send an explicit tts_provider. The voice/engine screens
     # save the whole bundle (incl. omnivoice_runtime) on every change, so without this
-    # guard picking Edge or VieNeu there would be silently reverted to OmniVoice.
+    # guard picking Edge there would be silently reverted to OmniVoice.
     if "omnivoice_runtime" in values and "tts_provider" not in values:
         current["tts_provider"] = "omnivoice"
     if current["omnivoice_runtime"] != "colab":

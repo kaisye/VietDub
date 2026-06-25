@@ -823,35 +823,34 @@ async def preview_voice_option(voice_id: str):
         "Xin chào, đây là bản nghe thử giọng tiếng Việt trong Aether Studio."
     )
 
-    # VieNeu voices must be previewed with the VieNeu engine — otherwise the
-    # preview plays a generic Edge voice that does not match the actual dub.
-    if voice and voice.engine == "vieneu":
-        # Prefer the pre-rendered demo clip shipped with the app: instant playback,
-        # and no need to download the ~0.5 GB model just to audition a voice.
-        from .services.vieneu_tts import bundled_preview_path
+    # NGHI-TTS voices must be previewed with the NGHI-TTS engine. Prefer the bundled
+    # pre-rendered clip (instant playback, no ~60 MB model download); otherwise
+    # download the model and synthesize a sample, caching it for next time.
+    if voice and voice.engine == "nghitts":
+        from .services.nghitts_tts import bundled_preview_path
 
         bundled = bundled_preview_path(voice.id)
         if bundled:
             return FileResponse(bundled, media_type="audio/mpeg")
 
         preview_path = (
-            ensure_storage() / "voice-previews" / f"vieneu_{_safe_filename(voice.id)}.mp3"
+            ensure_storage() / "voice-previews" / f"{_safe_filename(voice.id)}.mp3"
         )
         if not preview_path.exists() or preview_path.stat().st_size == 0:
             preview_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 import asyncio
 
-                from .services.vieneu_tts import synthesize_vieneu
+                from .services.nghitts_tts import synthesize_nghitts
 
-                # Blocking (model + ffmpeg); run off the event loop.
+                # Blocking (download + model + ffmpeg); run off the event loop.
                 await asyncio.to_thread(
-                    synthesize_vieneu, sample_text, voice.id, preview_path
+                    synthesize_nghitts, sample_text, voice.id, preview_path
                 )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Unable to generate VieNeu voice preview: {exc}",
+                    detail=f"Unable to generate NGHI-TTS voice preview: {exc}",
                 ) from exc
         return FileResponse(preview_path, media_type="audio/mpeg")
 

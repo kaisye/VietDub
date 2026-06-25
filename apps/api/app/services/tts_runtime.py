@@ -16,7 +16,7 @@ from .runtime_settings import RuntimeSettings, get_runtime_settings
 RUNTIME_OMNIVOICE_LOCAL = "omnivoice_local"
 RUNTIME_OMNIVOICE_COLAB = "omnivoice_colab"
 RUNTIME_EDGE = "edge"
-RUNTIME_VIENEU = "vieneu"
+RUNTIME_NGHITTS = "nghitts"
 
 
 def _local_gpu_available() -> bool:
@@ -62,10 +62,10 @@ def resolve_effective_tts_runtime(
     """
     settings = settings or get_runtime_settings()
 
-    # Non-OmniVoice providers don't probe GPU/Colab: VieNeu runs offline on CPU,
+    # Non-OmniVoice providers don't probe GPU/Colab: NGHI-TTS runs offline on CPU,
     # Edge is the always-available cloud default.
-    if settings.tts_provider == "vieneu":
-        return RUNTIME_VIENEU
+    if settings.tts_provider == "nghitts":
+        return RUNTIME_NGHITTS
     if settings.tts_provider != "omnivoice":
         return RUNTIME_EDGE
 

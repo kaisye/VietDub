@@ -126,10 +126,10 @@ function engineLabel(
     }
     case "tts_generating": {
       if (job.voice === "none") return isVI ? "Tắt giọng" : "No voice";
-      // VieNeu preset voices are routed by the voice itself (offline CPU engine),
+      // NGHI-TTS voices are routed by the voice itself (offline CPU engine),
       // independent of the global runtime — detect them first.
       const profile = voiceProfiles.find((p) => p.id === job.voice);
-      if (profile?.engine === "vieneu") return isVI ? "VieNeu · CPU offline" : "VieNeu · CPU offline";
+      if (profile?.engine === "nghitts") return "NGHI-TTS · CPU";
       const rt = options?.effective_tts_runtime;
       // Clone/design voices are auto-promoted to OmniVoice by the backend even when
       // the global tts_provider is "edge". Detect this case so the label stays honest.
@@ -137,8 +137,13 @@ function engineLabel(
       if (rt === "omnivoice_local") return "OmniVoice GPU";
       if (rt === "omnivoice_colab") return "OmniVoice Colab";
       if (cloneVoice) return "OmniVoice";
+      if (rt === "nghitts") return "NGHI-TTS · CPU";
       if (rt === "edge") return "Edge TTS";
-      return settings?.tts_provider === "omnivoice" ? "OmniVoice" : "Edge TTS";
+      return settings?.tts_provider === "nghitts"
+        ? "NGHI-TTS · CPU"
+        : settings?.tts_provider === "omnivoice"
+        ? "OmniVoice"
+        : "Edge TTS";
     }
     case "rendering":
       return job.render_quality

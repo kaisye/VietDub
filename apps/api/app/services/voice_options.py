@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .nghitts_tts import NGHITTS_PRESETS
 from .storage import ensure_storage
-from .vieneu_tts import VIENEU_PRESETS
 
 NO_VOICE_ID = "none"
 BUNDLED_VOICE_DIR = Path(__file__).resolve().parents[1] / "assets" / "defaults" / "voice-library"
@@ -36,23 +36,24 @@ class VoiceOption:
     reference_text_path: str = ""
     instruction: str = ""
     # Which TTS engine speaks this voice: "" / "edge" (Microsoft neural, default),
-    # "omnivoice" (clone/design on GPU), or "vieneu" (offline CPU preset voice).
+    # "omnivoice" (clone/design on GPU), or "nghitts" (offline CPU Piper voice).
     engine: str = ""
 
 
-# VieNeu offline preset voices (CPU, torch-free). Built from a single source of
-# truth so the catalog and the engine never drift apart.
-_VIENEU_VOICE_OPTIONS: list[VoiceOption] = [
+# NGHI-TTS offline preset voices (CPU, Piper/ONNX, torch-free). Built from a single
+# source of truth so the catalog and the engine never drift apart. Grouped with Edge
+# under the "Edge TTS" provider group in the UI.
+_NGHITTS_VOICE_OPTIONS: list[VoiceOption] = [
     VoiceOption(
         id=preset_id,
-        name=name,
+        name=display_name,
         locale="vi-VN",
         language="Vietnamese",
-        type="VieNeu (offline)",
-        description=f"VieNeu · chạy CPU offline · {accent}",
-        engine="vieneu",
+        type="NGHI-TTS (offline)",
+        description="NGHI-TTS · giọng Việt offline · CPU",
+        engine="nghitts",
     )
-    for preset_id, name, accent in VIENEU_PRESETS
+    for preset_id, _model_name, display_name in NGHITTS_PRESETS
 ]
 
 
@@ -99,7 +100,7 @@ DEFAULT_VOICE_OPTIONS: list[VoiceOption] = [
     VoiceOption(NO_VOICE_ID, "None", "none", "None", "Disabled", "Keep source audio without generating a dubbed voice."),
     VoiceOption("vi-VN-HoaiMyNeural", "Hoai My", "vi-VN", "Vietnamese", "Narration", "Vietnamese female narration voice for localized videos.", engine="edge"),
     VoiceOption("vi-VN-NamMinhNeural", "Nam Minh", "vi-VN", "Vietnamese", "Narration", "Vietnamese male narration voice for localized videos.", engine="edge"),
-    *_VIENEU_VOICE_OPTIONS,
+    *_NGHITTS_VOICE_OPTIONS,
     *_bundled_omnivoice_options(),
 ]
 

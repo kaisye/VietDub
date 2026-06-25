@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -22,12 +23,16 @@ from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_duration_scale
 from .storage import ensure_storage
 from .subtitle import subtitle_to_plain_text
+from .nghitts_tts import NGHITTS_PRESETS, is_nghitts_voice, synthesize_nghitts
 from .tts_runtime import RUNTIME_EDGE, resolve_effective_tts_runtime
-from .vieneu_tts import VIENEU_PRESETS, is_vieneu_voice, synthesize_vieneu
 from .voice_options import canonical_voice_id, list_voice_options
 
 
 logger = logging.getLogger(__name__)
+
+_UUID_RE = re.compile(
+    r"(?P<uuid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
 
 
 VOICE_BY_LANGUAGE = {
@@ -97,10 +102,26 @@ class VoiceOverrides:
     reference_text: str = ""
 
 
+def _safe_tts_artifact_stem(path: Path) -> str:
+    """Return a short stable stem for generated TTS artifacts.
+
+    Long source URLs/titles can leak into subtitle stems on some download paths.
+    Keeping TTS filenames anchored to the job UUID avoids Windows MAX_PATH
+    failures once chunk dirs, fit files, and manifests are appended.
+    """
+    stem = path.stem
+    match = _UUID_RE.search(stem)
+    if match:
+        return match.group("uuid").lower()
+    digest_source = str(path.resolve() if path.is_absolute() else path)
+    digest = hashlib.sha1(digest_source.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"tts-{digest}"
+
+
 @contextmanager
 def tts_provider_override(provider: str | None):
     normalized = (provider or "").strip().lower()
-    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"edge", "omnivoice", "vieneu"} else "")
+    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"edge", "omnivoice", "nghitts"} else "")
     try:
         yield
     finally:
@@ -119,13 +140,13 @@ def generate_tts(
 ) -> Path:
     """Generate spoken audio from subtitle text and place each segment on the subtitle timeline."""
     root = ensure_storage()
-    # Route VieNeu preset voices to the offline VieNeu engine regardless of the
-    # configured/overridden provider — a VieNeu voice can only be spoken by VieNeu,
-    # so the engine is implied by the selected voice (Edge and VieNeu coexist in the
-    # same catalog).
-    if is_vieneu_voice(voice) and _tts_provider() != "vieneu":
-        logger.info("Voice '%s' is a VieNeu preset; routing to the VieNeu engine.", voice)
-        with tts_provider_override("vieneu"):
+    # Route NGHI-TTS preset voices to the offline NGHI-TTS engine regardless of the
+    # configured/overridden provider — a NGHI-TTS voice can only be spoken by NGHI-TTS,
+    # so the engine is implied by the selected voice (Edge and NGHI-TTS coexist in the
+    # same catalog under the "Edge TTS" group).
+    if is_nghitts_voice(voice) and _tts_provider() != "nghitts":
+        logger.info("Voice '%s' is a NGHI-TTS preset; routing to the NGHI-TTS engine.", voice)
+        with tts_provider_override("nghitts"):
             return generate_tts(
                 text_or_subtitle,
                 voice,
@@ -136,16 +157,16 @@ def generate_tts(
                 speaker_voice_map,
                 diarization_job_id,
             )
-    # The provider is explicitly VieNeu but the chosen voice isn't one of its presets
-    # (e.g. a generic/default or Edge voice left selected). VieNeu can only speak its
+    # The provider is explicitly NGHI-TTS but the chosen voice isn't one of its presets
+    # (e.g. a generic/default or Edge voice left selected). NGHI-TTS can only speak its
     # built-in Vietnamese voices, so substitute the default preset for Vietnamese
     # targets and fall back to the always-available Edge voice for any other language —
-    # never hand a non-preset id to the engine, which would hard-fail.
-    if _tts_provider() == "vieneu" and not is_vieneu_voice(voice):
-        if str(target_language or "").lower().startswith("vi") and VIENEU_PRESETS:
-            default_voice = VIENEU_PRESETS[0][0]
+    # never hand a non-preset id to the engine.
+    if _tts_provider() == "nghitts" and not is_nghitts_voice(voice):
+        if str(target_language or "").lower().startswith("vi") and NGHITTS_PRESETS:
+            default_voice = NGHITTS_PRESETS[0][0]
             logger.info(
-                "VieNeu provider with non-preset voice '%s'; using default preset '%s'.",
+                "NGHI-TTS provider with non-preset voice '%s'; using default preset '%s'.",
                 voice,
                 default_voice,
             )
@@ -160,7 +181,7 @@ def generate_tts(
                 diarization_job_id,
             )
         logger.warning(
-            "VieNeu only speaks Vietnamese; falling back to Edge for language '%s'.",
+            "NGHI-TTS only speaks Vietnamese; falling back to Edge for language '%s'.",
             target_language,
         )
         with tts_provider_override("edge"):
@@ -214,7 +235,8 @@ def generate_tts(
                 diarization_job_id,
             )
     if speaker_voice_map and diarization_job_id:
-        output = root / "audio" / f"{text_or_subtitle.stem}.multivoice.mp3"
+        artifact_stem = _safe_tts_artifact_stem(text_or_subtitle)
+        output = root / "audio" / f"{artifact_stem}.multivoice.mp3"
         generated = generate_multivoice_cue_outputs(
             text_or_subtitle,
             target_language,
@@ -228,7 +250,7 @@ def generate_tts(
             for item in generated
         ]
         duration = max((float(item["end"]) for item in generated), default=0.0)
-        workdir = root / "audio" / f"{text_or_subtitle.stem}.multivoice"
+        workdir = root / "audio" / f"{artifact_stem}.multivoice"
         _mix_timed_audio(segments, output, workdir / "timeline_filter.txt", duration)
         output.with_suffix(".chunks.json").write_text(
             json.dumps(
@@ -269,10 +291,10 @@ def generate_tts(
     if not text:
         raise ValueError("No subtitle text available for TTS generation.")
 
-    output = root / "audio" / f"{text_or_subtitle.stem}.mp3"
+    output = root / "audio" / f"{_safe_tts_artifact_stem(text_or_subtitle)}.mp3"
     try:
-        if _tts_provider() == "vieneu":
-            synthesize_vieneu(text, selected_voice, output)
+        if _tts_provider() == "nghitts":
+            synthesize_nghitts(text, selected_voice, output)
         else:
             asyncio.run(_save_edge_tts(text, selected_voice, output, selected_rate))
     except Exception as exc:
@@ -304,7 +326,7 @@ def generate_multivoice_cue_outputs(
         raise RuntimeError("Translated speaker segments are empty.")
 
     root = ensure_storage()
-    workdir = output_dir or root / "audio" / f"{subtitle_path.stem}.multivoice"
+    workdir = output_dir or root / "audio" / f"{_safe_tts_artifact_stem(subtitle_path)}.multivoice"
     workdir.mkdir(parents=True, exist_ok=True)
     outputs: list[dict[str, Any]] = []
     provider = _tts_provider()
@@ -367,7 +389,7 @@ def _generate_aligned_tts(
     voice_overrides: VoiceOverrides | None = None,
 ) -> Path:
     root = ensure_storage()
-    output = root / "audio" / f"{subtitle_path.stem}.aligned.mp3"
+    output = root / "audio" / f"{_safe_tts_artifact_stem(subtitle_path)}.aligned.mp3"
     if os.getenv("AETHER_ALLOW_SYNTHETIC_AUDIO") == "1":
         return _create_synthetic_audio(output)
 
@@ -406,8 +428,9 @@ def _generate_chunked_tts(
                     voice_overrides,
                 )
 
-    output = root / "audio" / f"{subtitle_path.stem}.aligned.mp3"
-    workdir = root / "audio" / f"{subtitle_path.stem}.chunks"
+    artifact_stem = _safe_tts_artifact_stem(subtitle_path)
+    output = root / "audio" / f"{artifact_stem}.aligned.mp3"
+    workdir = root / "audio" / f"{artifact_stem}.chunks"
     workdir.mkdir(parents=True, exist_ok=True)
 
     preserve_cue_boundaries = subtitle_path.name.endswith(".display.srt")
@@ -417,8 +440,8 @@ def _generate_chunked_tts(
         else _semantic_sentence_cues(_ordered_cues(cues))
     )
 
-    if _tts_provider() == "vieneu":
-        return _generate_vieneu_timeline_tts(
+    if _tts_provider() == "nghitts":
+        return _generate_nghitts_timeline_tts(
             semantic_cues,
             voice,
             workdir,
@@ -467,6 +490,75 @@ def _generate_chunked_tts(
 
     if not output.exists() or output.stat().st_size == 0:
         raise RuntimeError("TTS provider returned an empty chunked audio file.")
+    return output
+
+
+def _generate_nghitts_timeline_tts(
+    semantic_cues: list[SubtitleCue],
+    voice: str,
+    workdir: Path,
+    output: Path,
+    speech_rate: SpeechRateProfile | None,
+    voice_overrides: VoiceOverrides | None,
+    *,
+    preserve_cue_boundaries: bool = False,
+) -> Path:
+    """Synthesize NGHI-TTS units (CPU, sequential) and fit each to the SRT timeline.
+
+    Mirrors the Edge timeline path so NGHI-TTS dubs stay in sync: each unit is voiced,
+    then time-compressed only if it would overrun the next cue, and overlaid on the
+    original timestamps. NGHI-TTS runs locally on CPU (Piper ONNX), so units are
+    produced one at a time rather than via the async fan-out used for Edge.
+    """
+    units = (
+        _ordered_cues(semantic_cues)
+        if preserve_cue_boundaries
+        else _edge_timeline_units(semantic_cues)
+    )
+    if not units:
+        raise RuntimeError("No subtitle cues available for NGHI-TTS timeline TTS.")
+
+    min_gap = _env_float("AETHER_EDGE_MIN_GAP_SECONDS", 0.08, minimum=0.0, maximum=2.0)
+    timed_segments: list[TimedAudioSegment] = []
+    manifest_chunks: list[TtsChunk] = []
+
+    for index, unit in enumerate(units):
+        raw_segment = workdir / f"{index + 1:04d}_nghitts_raw.wav"
+        cleaned = _sanitize_tts_text(unit.text)
+        target_duration = max(0.25, unit.end - unit.start)
+        if not _has_speakable_content(cleaned):
+            _create_silence(raw_segment, target_duration)
+        else:
+            try:
+                synthesize_nghitts(cleaned, voice, raw_segment)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"NGHI-TTS synthesis failed for voice '{voice}' on cue {index + 1}: {exc}"
+                ) from exc
+
+        next_start = units[index + 1].start if index + 1 < len(units) else float("inf")
+        max_duration = (
+            max(0.3, next_start - unit.start - min_gap)
+            if next_start != float("inf")
+            else float("inf")
+        )
+
+        fitted_path, fitted_duration = _fit_edge_audio_to_slot(
+            raw_segment,
+            workdir / f"{index + 1:04d}_nghitts_fit.mp3",
+            max_duration,
+        )
+        end = unit.start + fitted_duration
+        _flag_cue_overrun(workdir, f"{index + 1:04d}_nghitts", unit, fitted_duration, next_start)
+        timed_segments.append(TimedAudioSegment(path=fitted_path, start=unit.start, end=end))
+        manifest_chunks.append(TtsChunk(start=unit.start, end=end, cues=[unit]))
+
+    timeline_duration = max((segment.end for segment in timed_segments), default=0.0)
+    _mix_timed_audio(timed_segments, output, workdir / "timeline_filter.txt", timeline_duration)
+    _write_chunk_manifest(output, manifest_chunks, timed_segments, speech_rate)
+
+    if not output.exists() or output.stat().st_size == 0:
+        raise RuntimeError("NGHI-TTS returned an empty timeline audio file.")
     return output
 
 
@@ -569,75 +661,6 @@ def _generate_edge_timeline_tts(
 
     if not output.exists() or output.stat().st_size == 0:
         raise RuntimeError("TTS provider returned an empty Edge timeline audio file.")
-    return output
-
-
-def _generate_vieneu_timeline_tts(
-    semantic_cues: list[SubtitleCue],
-    voice: str,
-    workdir: Path,
-    output: Path,
-    speech_rate: SpeechRateProfile | None,
-    voice_overrides: VoiceOverrides | None,
-    *,
-    preserve_cue_boundaries: bool = False,
-) -> Path:
-    """Synthesize VieNeu units (CPU, sequential) and fit each to the SRT timeline.
-
-    Mirrors the Edge timeline path so VieNeu dubs stay in sync: each unit is voiced,
-    then time-compressed only if it would overrun the next cue, and overlaid on the
-    original timestamps. VieNeu runs locally on CPU, so units are produced one at a
-    time rather than via the async fan-out used for the Edge cloud service.
-    """
-    units = (
-        _ordered_cues(semantic_cues)
-        if preserve_cue_boundaries
-        else _edge_timeline_units(semantic_cues)
-    )
-    if not units:
-        raise RuntimeError("No subtitle cues available for VieNeu timeline TTS.")
-
-    min_gap = _env_float("AETHER_EDGE_MIN_GAP_SECONDS", 0.08, minimum=0.0, maximum=2.0)
-    timed_segments: list[TimedAudioSegment] = []
-    manifest_chunks: list[TtsChunk] = []
-
-    for index, unit in enumerate(units):
-        raw_segment = workdir / f"{index + 1:04d}_vieneu_raw.wav"
-        cleaned = _sanitize_tts_text(unit.text)
-        target_duration = max(0.25, unit.end - unit.start)
-        if not _has_speakable_content(cleaned):
-            _create_silence(raw_segment, target_duration)
-        else:
-            try:
-                synthesize_vieneu(cleaned, voice, raw_segment)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"VieNeu synthesis failed for voice '{voice}' on cue {index + 1}: {exc}"
-                ) from exc
-
-        next_start = units[index + 1].start if index + 1 < len(units) else float("inf")
-        max_duration = (
-            max(0.3, next_start - unit.start - min_gap)
-            if next_start != float("inf")
-            else float("inf")
-        )
-
-        fitted_path, fitted_duration = _fit_edge_audio_to_slot(
-            raw_segment,
-            workdir / f"{index + 1:04d}_vieneu_fit.mp3",
-            max_duration,
-        )
-        end = unit.start + fitted_duration
-        _flag_cue_overrun(workdir, f"{index + 1:04d}_vieneu", unit, fitted_duration, next_start)
-        timed_segments.append(TimedAudioSegment(path=fitted_path, start=unit.start, end=end))
-        manifest_chunks.append(TtsChunk(start=unit.start, end=end, cues=[unit]))
-
-    timeline_duration = max((segment.end for segment in timed_segments), default=0.0)
-    _mix_timed_audio(timed_segments, output, workdir / "timeline_filter.txt", timeline_duration)
-    _write_chunk_manifest(output, manifest_chunks, timed_segments, speech_rate)
-
-    if not output.exists() or output.stat().st_size == 0:
-        raise RuntimeError("VieNeu returned an empty timeline audio file.")
     return output
 
 
@@ -788,7 +811,7 @@ def _generate_omnivoice_srt_tts(
     voice_overrides: VoiceOverrides | None = None,
 ) -> Path:
     root = ensure_storage()
-    output = root / "audio" / f"{subtitle_path.stem}.omnivoice_srt.wav"
+    output = root / "audio" / f"{_safe_tts_artifact_stem(subtitle_path)}.omnivoice_srt.wav"
     settings = get_runtime_settings()
     voice_option = _find_voice_option(voice)
     base_url = _resolve_omnivoice_base_url(settings)
@@ -1981,8 +2004,8 @@ def _save_provider_tts(
     voice_overrides: VoiceOverrides | None = None,
 ) -> None:
     provider = _tts_provider()
-    if provider == "vieneu":
-        synthesize_vieneu(text, voice, output)
+    if provider == "nghitts":
+        synthesize_nghitts(text, voice, output)
         return
     if provider == "omnivoice":
         try:
@@ -2553,7 +2576,7 @@ def _resolve_voice(voice: str, target_language: str) -> str:
         # Edge TTS only accepts Microsoft Neural voice IDs (e.g. "vi-VN-HoaiMyNeural").
         # OmniVoice-specific IDs (e.g. "CDTeam") must not be forwarded to Edge TTS.
         is_neural_id = normalized.endswith("Neural") and "-" in normalized
-        if is_neural_id or _tts_provider() in {"omnivoice", "vieneu"}:
+        if is_neural_id or _tts_provider() in {"omnivoice", "nghitts"}:
             return normalized
         # Provider is Edge — map via the voice option's locale to the nearest neural voice.
         locale_key = (option.locale or "").split("-")[0].lower()
@@ -2567,7 +2590,7 @@ def _resolve_voice(voice: str, target_language: str) -> str:
     )
     if matched_option:
         is_neural_id = matched_option.id.endswith("Neural") and "-" in matched_option.id
-        if is_neural_id or _tts_provider() in {"omnivoice", "vieneu"}:
+        if is_neural_id or _tts_provider() in {"omnivoice", "nghitts"}:
             return matched_option.id
         locale_key = (matched_option.locale or "").split("-")[0].lower()
         lang_key = locale_key or (target_language or "en").split("-")[0].lower()
