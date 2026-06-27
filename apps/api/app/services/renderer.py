@@ -1012,8 +1012,17 @@ def _blur_op(style: str, region_width: int, region_height: int, strength: int = 
     if style == "horizontal":
         sigma_h = max(2, min(200, round(region_width / 12 * mul)))
         return f"gblur=sigma={sigma_h}:sigmaV=0"
-    blur_radius = max(1, min(60, round(region_height / 8 * mul)))
-    return f"boxblur={blur_radius}:2"
+    # boxblur rejects any radius larger than half the plane size. On 4:2:0 video
+    # the chroma plane is subsampled to a quarter area, so its ceiling is
+    # min(w,h)//4 — well under the luma ceiling. Emit an explicit, separately
+    # clamped chroma radius so a strong blur over a short caption band can't push
+    # the chroma radius past FFmpeg's limit (which aborts the entire render with
+    # "Invalid chroma_param radius value").
+    smallest = max(2, min(region_width, region_height))
+    auto_radius = max(1, min(60, round(region_height / 8 * mul)))
+    luma_radius = min(auto_radius, max(1, smallest // 2))
+    chroma_radius = min(auto_radius, max(1, smallest // 4))
+    return f"boxblur={luma_radius}:2:{chroma_radius}:2"
 
 
 def _aspect_ratio_filter(video_path: Path, aspect_ratio: str) -> str:
