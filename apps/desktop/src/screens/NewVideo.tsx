@@ -1,4 +1,5 @@
 import {
+  Captions,
   Check,
   Download,
   FileVideo,
@@ -12,6 +13,7 @@ import {
   Volume2,
 } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +39,7 @@ import {
   type DraftValidation,
 } from "../lib/create-draft";
 import {
+  createSubtitleStyle,
   createQuickVideoJob,
   getSubtitleStyles,
   getVoiceOptions,
@@ -138,18 +141,23 @@ export default function NewVideoScreen({ onStarted }: { onStarted: (jobId: strin
       });
   }, []);
 
+  const reloadSubtitleStyles = useCallback(async () => {
+    try {
+      const library = await getSubtitleStyles();
+      setSubtitleStyles(library.styles);
+      setActiveSubtitleStyleId(library.active_style_id);
+      setSubtitleLibraryError("");
+      return library.styles;
+    } catch (error: unknown) {
+      setSubtitleStyles([]);
+      setSubtitleLibraryError(error instanceof Error ? error.message : t.sub_style_lib_err_body);
+      return [] as SubtitleStylePreset[];
+    }
+  }, [t.sub_style_lib_err_body]);
+
   useEffect(() => {
-    getSubtitleStyles()
-      .then((library) => {
-        setSubtitleStyles(library.styles);
-        setActiveSubtitleStyleId(library.active_style_id);
-        setSubtitleLibraryError("");
-      })
-      .catch((error: unknown) => {
-        setSubtitleStyles([]);
-        setSubtitleLibraryError(error instanceof Error ? error.message : t.sub_style_lib_err_body);
-      });
-  }, []);
+    void reloadSubtitleStyles();
+  }, [reloadSubtitleStyles]);
 
   function patch<K extends keyof CreateDraft>(key: K, value: CreateDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -322,6 +330,7 @@ export default function NewVideoScreen({ onStarted }: { onStarted: (jobId: strin
           previewLoading={previewLoading}
           previewError={previewError}
           onRequestPreview={() => void prepareSourcePreview()}
+          onReloadStyles={reloadSubtitleStyles}
         />
       ) : step === 4 ? (
         <OutputStep draft={draft} patch={patch} />
@@ -463,6 +472,23 @@ function SourceStep({
     else video.pause();
   }
 
+  // Subtitle source, ordered by extraction priority and shown as a highlighted
+  // card list at the top of the step. "auto" is the recommended default; the
+  // three explicit methods are numbered 1→3 (existing subs → hard-sub OCR → STT).
+  const subtitleSources: Array<{
+    value: CreateDraft["source"]["subtitle_strategy"];
+    badge: string;
+    title: string;
+    desc: string;
+    tag?: string;
+    recommended?: boolean;
+  }> = [
+    { value: "auto", badge: "★", title: t.src_sub_opt_auto, desc: t.src_sub_auto, tag: t.src_sub_recommended, recommended: true },
+    { value: "embedded", badge: "1", title: t.src_sub_opt_embedded, desc: t.src_sub_embedded },
+    { value: "ocr", badge: "2", title: t.src_sub_opt_ocr, desc: t.src_sub_ocr, tag: t.src_sub_for_hardsub },
+    { value: "speech", badge: "3", title: t.src_sub_opt_speech, desc: t.src_sub_speech },
+  ];
+
   return (
     <div className="space-y-5">
       <EditorSection compact title={t.src_title} description={t.src_desc}>
@@ -541,7 +567,63 @@ function SourceStep({
         )}
       </EditorSection>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,.75fr)]">
+      <section className="rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+        <div className="mb-3 flex items-start gap-2.5">
+          <Captions size={22} className="mt-0.5 shrink-0 text-[var(--primary-hover)]" />
+          <div className="min-w-0">
+            <h2 className="font-display text-xl leading-tight">{t.src_sub_source}</h2>
+            <p className="mt-0.5 text-xs leading-5 text-[var(--text-secondary)]">{t.src_sub_section_desc}</p>
+          </div>
+        </div>
+        <div className="grid gap-2">
+          {subtitleSources.map((opt) => {
+            const selected = source.subtitle_strategy === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => patch("source", { ...source, subtitle_strategy: opt.value })}
+                className={`flex items-start gap-3 rounded-[var(--radius-control)] border p-3 text-left transition ${
+                  selected
+                    ? "border-[var(--primary)] bg-[var(--surface)] shadow-sm"
+                    : "border-[var(--border)] bg-[var(--surface-muted)] hover:border-[var(--primary)]"
+                }`}
+              >
+                <span
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-extrabold ${
+                    selected || opt.recommended
+                      ? "bg-[var(--primary)] text-white"
+                      : "bg-[var(--primary-soft)] text-[var(--primary-hover)]"
+                  }`}
+                >
+                  {opt.badge}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-[var(--text-primary)]">{opt.title}</span>
+                    {opt.recommended ? (
+                      <span className="rounded-full bg-[var(--primary)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                        {opt.tag}
+                      </span>
+                    ) : opt.tag ? (
+                      <span className="rounded-full bg-[var(--primary-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--primary-hover)]">
+                        {opt.tag}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-5 text-[var(--text-secondary)]">{opt.desc}</span>
+                </span>
+                {selected ? (
+                  <Check size={16} strokeWidth={3} className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(220px,.4fr)]">
         <EditorSection
           title={t.src_preview_title}
           description={t.src_preview_desc}
@@ -682,7 +764,7 @@ function SourceStep({
             <Meta label={t.src_meta_resolution} value={source.resolution === "Available after source selection" ? t.src_meta_pending : source.resolution} />
           </dl>
         </EditorSection>
-        <EditorSection title={t.src_lang_title}>
+        <EditorSection compact title={t.src_lang_title}>
           <div className="space-y-5">
             <Field label={t.src_lang_source}>
               <Select value={draft.languages.source} onChange={(event) => patch("languages", { ...draft.languages, source: event.target.value })}>
@@ -694,28 +776,6 @@ function SourceStep({
                 {TARGET_LANGUAGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </Select>
             </Field>
-            <div>
-              <SegmentedControl
-                label={t.src_sub_source}
-                value={source.subtitle_strategy}
-                options={[
-                  { value: "auto", label: t.src_sub_opt_auto },
-                  { value: "embedded", label: t.src_sub_opt_embedded },
-                  { value: "speech", label: t.src_sub_opt_speech },
-                  { value: "ocr", label: t.src_sub_opt_ocr },
-                ]}
-                onChange={(value) => patch("source", { ...source, subtitle_strategy: value as CreateDraft["source"]["subtitle_strategy"] })}
-              />
-              <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                {source.subtitle_strategy === "auto"
-                  ? t.src_sub_auto
-                  : source.subtitle_strategy === "embedded"
-                    ? t.src_sub_embedded
-                    : source.subtitle_strategy === "speech"
-                      ? t.src_sub_speech
-                      : t.src_sub_ocr}
-              </p>
-            </div>
           </div>
         </EditorSection>
       </div>
@@ -1258,6 +1318,7 @@ function SubtitleStep({
   previewLoading,
   previewError,
   onRequestPreview,
+  onReloadStyles,
 }: DraftStepProps & {
   previewUrl: string;
   sourceAspectRatio: number;
@@ -1268,7 +1329,9 @@ function SubtitleStep({
   previewLoading: boolean;
   previewError: string;
   onRequestPreview: () => void;
+  onReloadStyles: () => Promise<SubtitleStylePreset[]>;
 }) {
+  const { t } = useT();
   const subtitle = draft.subtitle;
   const subtitlesDisabled = subtitle.style_id === "none";
   const selectedStyle = styles.find((style) => style.id === subtitle.style_id);
@@ -1329,6 +1392,35 @@ function SubtitleStep({
         ...updates,
       },
     });
+  }
+
+  const [showSaveStyle, setShowSaveStyle] = useState(false);
+  const [styleNameDraft, setStyleNameDraft] = useState("");
+  const [savingStyle, setSavingStyle] = useState(false);
+  const [saveStyleError, setSaveStyleError] = useState("");
+  const [styleSaved, setStyleSaved] = useState(false);
+
+  async function saveCurrentStyle() {
+    const name = styleNameDraft.trim();
+    if (!name || savingStyle) return;
+    setSavingStyle(true);
+    setSaveStyleError("");
+    try {
+      const preset = await createSubtitleStyle({ name, style: effectiveStyle });
+      await onReloadStyles();
+      // The saved preset now carries the full look; point the draft at it and
+      // drop the ad-hoc overrides so the dropdown reflects the named style and
+      // the live preview keeps rendering the exact same thing.
+      patch("subtitle", { ...subtitle, style_id: preset.id, style_overrides: {} });
+      setShowSaveStyle(false);
+      setStyleNameDraft("");
+      setStyleSaved(true);
+      window.setTimeout(() => setStyleSaved(false), 1800);
+    } catch (error) {
+      setSaveStyleError(error instanceof Error ? error.message : t.sub_style_save_err);
+    } finally {
+      setSavingStyle(false);
+    }
   }
 
   function moveSubtitle(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1528,8 +1620,6 @@ function SubtitleStep({
       },
     });
   }
-
-  const { t } = useT();
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(520px,1.2fr)_360px]">
@@ -1749,6 +1839,64 @@ function SubtitleStep({
             <span className="font-mono">
               x {Number(effectiveStyle.position_x ?? 0.5).toFixed(2)} · y {Number(effectiveStyle.position_y ?? 0.88).toFixed(2)} · {Math.round(Number(effectiveStyle.font_size ?? 20))}px
             </span>
+          </div>
+        ) : null}
+        {!subtitlesDisabled ? (
+          <div className="mt-4 border-t border-[var(--border)] pt-4">
+            {showSaveStyle ? (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <TextField
+                  className="flex-1"
+                  value={styleNameDraft}
+                  autoFocus
+                  maxLength={60}
+                  placeholder={t.sub_style_name_ph}
+                  onChange={(event) => setStyleNameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void saveCurrentStyle();
+                    if (event.key === "Escape") { setShowSaveStyle(false); setSaveStyleError(""); }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    loading={savingStyle}
+                    disabled={!styleNameDraft.trim()}
+                    leadingIcon={<Save size={16} />}
+                    onClick={() => void saveCurrentStyle()}
+                  >
+                    {t.sub_style_save_action}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => { setShowSaveStyle(false); setSaveStyleError(""); }}
+                  >
+                    {t.sub_style_cancel}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="min-w-0 text-xs text-[var(--text-secondary)]">
+                  {styleSaved ? (
+                    <span className="font-semibold text-emerald-600">✓ {t.sub_style_saved}</span>
+                  ) : (
+                    t.sub_style_save_hint
+                  )}
+                </p>
+                <Button
+                  type="button"
+                  variant="primary"
+                  leadingIcon={<Save size={16} />}
+                  onClick={() => { setStyleNameDraft(""); setShowSaveStyle(true); }}
+                >
+                  {t.sub_style_save_btn}
+                </Button>
+              </div>
+            )}
+            {saveStyleError ? <p className="mt-2 text-xs text-red-600">{saveStyleError}</p> : null}
           </div>
         ) : null}
       </EditorSection>

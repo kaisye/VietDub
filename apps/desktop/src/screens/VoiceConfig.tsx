@@ -9,6 +9,9 @@ import {
   getVoiceOptions,
   getWorkspaceSettings,
   getColabStatus,
+  getColabAccounts,
+  switchColabSavedAccount,
+  removeColabAccount,
   launchColab,
   stopColab,
   setupColabCli,
@@ -26,6 +29,7 @@ import {
   voicePreviewUrl,
 } from "../api";
 import type {
+  ColabAccount,
   OmniVoiceColabStatus,
   OmniVoiceLocalSetup,
   RuntimeOptions,
@@ -262,23 +266,192 @@ function ColabBootstrapProgress({ state, startedAt }: { state: string; startedAt
   );
 }
 
+// ─── Google account avatar ───────────────────────────────────────────────────
+
+function AccountAvatar({
+  picture,
+  email,
+  size = 28,
+}: {
+  picture?: string;
+  email?: string;
+  size?: number;
+}) {
+  const [broken, setBroken] = useState(false);
+  const letter = (email || "?").trim().charAt(0).toUpperCase() || "?";
+  const hue = useMemo(() => {
+    let value = 0;
+    for (const ch of email || "") value = (value * 31 + ch.charCodeAt(0)) % 360;
+    return value;
+  }, [email]);
+
+  if (picture && !broken) {
+    return (
+      <img
+        src={picture}
+        alt={email || ""}
+        width={size}
+        height={size}
+        onError={() => setBroken(true)}
+        referrerPolicy="no-referrer"
+        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+      />
+    );
+  }
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        flexShrink: 0,
+        background: `hsl(${hue} 55% 45%)`,
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 700,
+        fontSize: Math.round(size * 0.45),
+      }}
+    >
+      {letter}
+    </div>
+  );
+}
+
+// ─── Saved Google accounts (quick switch) ─────────────────────────────────────
+
+function ColabAccountsPanel({
+  accounts,
+  busy,
+  onUse,
+  onAdd,
+  onRemove,
+}: {
+  accounts: ColabAccount[];
+  busy: boolean;
+  onUse: (slug: string) => void;
+  onAdd: () => void;
+  onRemove: (slug: string) => void;
+}) {
+  const { t } = useT();
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: "var(--surface-muted)", borderRadius: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{t.colab_accounts_title}</span>
+        <button className="btn" disabled={busy} onClick={onAdd}>
+          {t.colab_accounts_add}
+        </button>
+      </div>
+      {accounts.length === 0 ? (
+        <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>
+          {t.colab_accounts_empty}
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+          {accounts.map((acc) => (
+            <div
+              key={acc.slug}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                background: "var(--surface)",
+                borderRadius: 6,
+                border: acc.active ? "1px solid var(--primary)" : "1px solid transparent",
+              }}
+            >
+              <AccountAvatar picture={acc.picture} email={acc.email} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {acc.name || acc.email}
+                </div>
+                {acc.name && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-secondary)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {acc.email}
+                  </div>
+                )}
+              </div>
+              {acc.active ? (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ok)" }}>
+                  {t.colab_accounts_active}
+                </span>
+              ) : (
+                <button className="btn" disabled={busy} onClick={() => onUse(acc.slug)}>
+                  {t.colab_accounts_use}
+                </button>
+              )}
+              <button
+                type="button"
+                title={t.colab_accounts_remove}
+                aria-label={t.colab_accounts_remove}
+                disabled={busy || acc.active}
+                onClick={() => onRemove(acc.slug)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: busy || acc.active ? "default" : "pointer",
+                  fontSize: 18,
+                  lineHeight: 1,
+                  padding: "0 4px",
+                  opacity: acc.active ? 0.3 : 0.7,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
+        {t.colab_accounts_hint}
+      </p>
+    </div>
+  );
+}
+
 // ─── ColabStatusPanel ────────────────────────────────────────────────────────
 
 function ColabStatusPanel({
   status,
+  accounts,
   onLaunch,
   onStop,
   onSetup,
   onSwitchAccount,
+  onUseAccount,
+  onRemoveAccount,
   onSubmitAuthCode,
   setupMessage,
   busy,
 }: {
   status: OmniVoiceColabStatus;
+  accounts: ColabAccount[];
   onLaunch: () => void;
   onStop: () => void;
   onSetup: () => void;
   onSwitchAccount: () => void;
+  onUseAccount: (slug: string) => void;
+  onRemoveAccount: (slug: string) => void;
   onSubmitAuthCode: (code: string) => void;
   setupMessage: string;
   busy: boolean;
@@ -342,6 +515,7 @@ function ColabStatusPanel({
 
   const stateLabel = STATE_LABELS[status.state] ?? status.state;
   const stateColor = STATE_COLOR[status.state] ?? "var(--text-secondary)";
+  const accountEmail = status.account_email || status.account_hint;
   const isLive = LIVE_STATES.has(status.state);
   const isReady = status.state === "ready";
   const needsSetup = status.state === "setup_required";
@@ -363,11 +537,23 @@ function ColabStatusPanel({
         }}
       >
         <StateDot state={status.state} />
+        {accountEmail && (
+          <AccountAvatar picture={status.account_picture} email={accountEmail} size={34} />
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: stateColor }}>{stateLabel}</div>
-          {status.account_hint && (
-            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 1 }}>
-              {status.account_hint}
+          {accountEmail && (
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginTop: 1,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {status.account_name ? `${status.account_name} · ${accountEmail}` : accountEmail}
             </div>
           )}
         </div>
@@ -572,17 +758,17 @@ function ColabStatusPanel({
             {t.retry}
           </button>
         )}
-        {(isLive || isReady) && (
-          <button className="btn" disabled={busy} onClick={onSwitchAccount}>
-            {t.colab_btn_switch}
-          </button>
-        )}
-        {status.state === "stopped" && status.cli_installed && (
-          <button className="btn" onClick={onSwitchAccount}>
-            {t.colab_btn_switch}
-          </button>
-        )}
       </div>
+
+      {status.cli_installed && !needsSetup && (
+        <ColabAccountsPanel
+          accounts={accounts}
+          busy={busy}
+          onUse={onUseAccount}
+          onAdd={onSwitchAccount}
+          onRemove={onRemoveAccount}
+        />
+      )}
 
       {status.cli_installed && (
         <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>
@@ -1457,6 +1643,7 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
   const [options, setOptions] = useState<RuntimeOptions | null>(null);
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [colab, setColab] = useState<OmniVoiceColabStatus | null>(null);
+  const [colabAccounts, setColabAccounts] = useState<ColabAccount[]>([]);
   const [omniKey, setOmniKey] = useState("");
   const [ngrokToken, setNgrokToken] = useState("");
   const [ngrokSaving, setNgrokSaving] = useState(false);
@@ -1510,7 +1697,23 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
+  const refreshColabAccounts = useCallback(async () => {
+    try {
+      const data = await getColabAccounts();
+      setColabAccounts(data.accounts);
+    } catch {
+      /* listing accounts is best-effort — leave the previous list in place */
+    }
+  }, []);
+
   useEffect(() => { void reload(); }, []);
+
+  // Load the saved-accounts list when the Colab tab opens and whenever the
+  // signed-in account changes (so a newly added account appears and the active
+  // marker stays correct).
+  useEffect(() => {
+    if (section === "colab" && colab?.cli_installed) void refreshColabAccounts();
+  }, [section, colab?.cli_installed, colab?.account_email, refreshColabAccounts]);
 
   useEffect(() => {
     if (!colab) return;
@@ -1614,6 +1817,19 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
     try {
       const c = await action();
       setColab(c);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.voice_action_error);
+    } finally {
+      setColabBusy(false);
+      void refreshColabAccounts();
+    }
+  }
+
+  async function removeSavedAccount(slug: string) {
+    setColabBusy(true);
+    try {
+      const data = await removeColabAccount(slug);
+      setColabAccounts(data.accounts);
     } catch (e) {
       setError(e instanceof Error ? e.message : t.voice_action_error);
     } finally {
@@ -1958,12 +2174,15 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
           {colab ? (
             <ColabStatusPanel
               status={colab}
+              accounts={colabAccounts}
               busy={colabBusy}
               setupMessage={wslSetupMessage}
               onLaunch={() => void handleColabAction(launchColab)}
               onStop={() => void handleColabAction(stopColab)}
               onSetup={() => void setupColabEnvironment()}
               onSwitchAccount={() => void handleColabAction(switchColabAccount)}
+              onUseAccount={(slug) => void handleColabAction(() => switchColabSavedAccount(slug))}
+              onRemoveAccount={(slug) => void removeSavedAccount(slug)}
               onSubmitAuthCode={(code) => void handleColabAction(() => submitColabAuthCode(code))}
             />
           ) : (

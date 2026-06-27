@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,14 @@ COLAB_GPU = os.getenv("AETHER_COLAB_GPU", "T4").strip() or "T4"
 COLAB_BIN = os.getenv("AETHER_COLAB_BIN", "/root/.local/bin/colab").strip() or "/root/.local/bin/colab"
 READY_PREFIX = "AETHER_OMNIVOICE_READY="
 STATE_PREFIX = "AETHER_OMNIVOICE_STATE="
+
+# colab-cli credential layout inside WSL. The live token is what every `colab`
+# command reads; we archive a copy per Google account under ACCOUNTS_DIR so a
+# previously used account can be restored without a fresh browser login.
+COLAB_CONFIG_DIR = "/root/.config/colab-cli"
+LIVE_TOKEN_PATH = f"{COLAB_CONFIG_DIR}/token.json"
+ACCOUNTS_DIR = "/root/.config/colab-cli-accounts"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 _process_lock = threading.Lock()
 _active_process: subprocess.Popen[str] | None = None
@@ -145,6 +154,9 @@ def install_colab_cli() -> dict[str, Any]:
 
 
 def switch_colab_account() -> dict[str, Any]:
+    # Archive the account in use first so adding a new one never discards it —
+    # the user can switch straight back without logging in again.
+    _capture_active_account()
     stop_colab_runtime()
     # Delete the saved OAuth token so the next launch prompts for a new account.
     # Also remove sessions.json so the status check returns "no session" — this
@@ -239,8 +251,14 @@ def stop_colab_runtime() -> dict[str, Any]:
         if _active_thread is launcher and (launcher is None or not launcher.is_alive()):
             _active_thread = None
 
+    prior = _read_state()
     state = {**_default_state(), **_environment_status()}
     state["state"] = "stopped"
+    # Keep the signed-in account visible in the header while stopped — the saved
+    # token is still on disk, so the connection is paused, not signed out.
+    for key in ("account_email", "account_name", "account_picture", "account_hint"):
+        if prior.get(key):
+            state[key] = prior[key]
     state["updated_at"] = time.time()
     _write_state(state)
     return get_colab_runtime_status()
@@ -335,10 +353,15 @@ def _launch_worker() -> None:
             session_started_at=time.time(),
             error=None,
         )
-        account = _run_colab(["whoami"], timeout=60)
-        account_match = re.search(r"Email:\s+([^\s]+)", account.stdout)
-        if account_match:
-            _update_state(account_hint=account_match.group(1))
+        # Capture (and archive) the signed-in account: email, display name and
+        # avatar for the UI, plus a saved token so it can be restored later.
+        # Fall back to `colab whoami` for just the email if the profile fetch
+        # fails (e.g. offline).
+        if not _capture_active_account():
+            account = _run_colab(["whoami"], timeout=60)
+            account_match = re.search(r"Email:\s+([^\s]+)", account.stdout)
+            if account_match:
+                _update_state(account_hint=account_match.group(1))
 
         bootstrap_path = _write_bootstrap_script()
         result = _run_colab_streaming(
@@ -536,6 +559,280 @@ def _open_authorization_url(url: str) -> bool:
 def _has_colab_token() -> bool:
     result = _run_wsl("test -s /root/.config/colab-cli/token.json", timeout=10)
     return result.returncode == 0
+
+
+# --- Saved Google accounts ---------------------------------------------------
+# Switching account used to delete the saved OAuth token, forcing a full browser
+# login every time. We instead archive each account's token.json under
+# ACCOUNTS_DIR keyed by a slug of its email. Restoring a saved token lets
+# colab-cli refresh silently (the refresh_token never expires for these scopes),
+# so switching back to a known account skips the browser entirely.
+
+
+_WSL_READ_SENTINEL = "AETHER_B64"
+
+
+def _wsl_read_text(path: str) -> str | None:
+    """Read a file from WSL as text (base64 transport avoids encoding surprises).
+
+    The payload is wrapped in sentinels so any login-shell/MOTD noise a `bash -lc`
+    might print can't corrupt the decoded bytes.
+    """
+    command = (
+        f"test -s {shlex.quote(path)} || exit 9; "
+        f"printf '<{_WSL_READ_SENTINEL}>'; "
+        f"base64 -w0 {shlex.quote(path)} 2>/dev/null; "
+        f"printf '</{_WSL_READ_SENTINEL}>'"
+    )
+    result = _run_wsl(command, timeout=15)
+    if result.returncode != 0:
+        return None
+    match = re.search(
+        rf"<{_WSL_READ_SENTINEL}>(.*)</{_WSL_READ_SENTINEL}>", result.stdout, re.S
+    )
+    data = (match.group(1).strip() if match else "")
+    if not data:
+        return None
+    try:
+        return base64.b64decode(data).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _wsl_write_text(path: str, content: str) -> bool:
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    directory = path.rsplit("/", 1)[0]
+    command = (
+        f"mkdir -p {shlex.quote(directory)} && "
+        f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+    )
+    return _run_wsl(command, timeout=15).returncode == 0
+
+
+def _account_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+    return slug or "account"
+
+
+def _token_key(token: dict[str, Any]) -> str:
+    raw = str(token.get("refresh_token") or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if raw else ""
+
+
+def _fetch_account_identity(token: dict[str, Any]) -> dict[str, str] | None:
+    """Refresh the access token and read the Google profile (email/name/avatar).
+
+    Uses the stored refresh_token — no browser, no interaction. The userinfo
+    ``picture`` is a public googleusercontent URL the UI can load directly.
+    """
+    refresh_token = token.get("refresh_token")
+    client_id = token.get("client_id")
+    client_secret = token.get("client_secret")
+    token_uri = token.get("token_uri") or "https://oauth2.googleapis.com/token"
+    if not (refresh_token and client_id and client_secret):
+        return None
+    try:
+        token_response = httpx.post(
+            token_uri,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+        token_response.raise_for_status()
+        access_token = str(token_response.json().get("access_token") or "")
+        if not access_token:
+            return None
+        userinfo_response = httpx.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
+        userinfo_response.raise_for_status()
+        info = userinfo_response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    email = str(info.get("email") or "").strip()
+    if not email:
+        return None
+    return {
+        "email": email,
+        "name": str(info.get("name") or ""),
+        "picture": str(info.get("picture") or ""),
+    }
+
+
+def _read_account_profiles() -> list[dict[str, Any]]:
+    listing = _run_wsl(f"ls -1 {shlex.quote(ACCOUNTS_DIR)} 2>/dev/null", timeout=15)
+    if listing.returncode != 0:
+        return []
+    profiles: list[dict[str, Any]] = []
+    for slug in [line.strip() for line in listing.stdout.splitlines() if line.strip()]:
+        meta_text = _wsl_read_text(f"{ACCOUNTS_DIR}/{slug}/meta.json")
+        if not meta_text:
+            continue
+        try:
+            meta = json.loads(meta_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(meta, dict):
+            meta.setdefault("slug", slug)
+            profiles.append(meta)
+    return profiles
+
+
+def _write_account_profile(slug: str, token_text: str, meta: dict[str, Any]) -> None:
+    base = f"{ACCOUNTS_DIR}/{slug}"
+    _wsl_write_text(f"{base}/token.json", token_text)
+    _wsl_write_text(f"{base}/meta.json", json.dumps(meta, indent=2))
+
+
+def _set_active_account_state(meta: dict[str, Any]) -> None:
+    _update_state(
+        account_email=meta.get("email", ""),
+        account_name=meta.get("name", ""),
+        account_picture=meta.get("picture", ""),
+        account_hint=meta.get("email", ""),
+    )
+
+
+def _live_token() -> dict[str, Any] | None:
+    token_text = _wsl_read_text(LIVE_TOKEN_PATH)
+    if not token_text:
+        return None
+    try:
+        token = json.loads(token_text)
+    except json.JSONDecodeError:
+        return None
+    return token if isinstance(token, dict) else None
+
+
+def _capture_active_account() -> dict[str, Any] | None:
+    """Archive the currently signed-in account so it can be restored later.
+
+    Reuses the cached profile (no network) when the live token was already
+    archived; otherwise fetches the identity once and writes the profile. Also
+    mirrors the active account's email/name/avatar into the runtime state.
+    """
+    token_text = _wsl_read_text(LIVE_TOKEN_PATH)
+    if not token_text:
+        return None
+    try:
+        token = json.loads(token_text)
+    except json.JSONDecodeError:
+        return None
+    key = _token_key(token)
+    if key:
+        for profile in _read_account_profiles():
+            if profile.get("token_key") == key and profile.get("picture"):
+                _set_active_account_state(profile)
+                return profile
+    identity = _fetch_account_identity(token)
+    if not identity:
+        return None
+    slug = _account_slug(identity["email"])
+    meta = {
+        "slug": slug,
+        "email": identity["email"],
+        "name": identity["name"],
+        "picture": identity["picture"],
+        "token_key": key,
+        "added_at": time.time(),
+        "last_used_at": time.time(),
+    }
+    _write_account_profile(slug, token_text, meta)
+    _set_active_account_state(meta)
+    return meta
+
+
+def list_colab_accounts() -> dict[str, Any]:
+    # Make sure the account in use right now is archived and listed, even if it
+    # predates this feature or was added before we started capturing.
+    active = _capture_active_account()
+    active_key = active.get("token_key") if active else None
+    if active_key is None:
+        live = _live_token()
+        active_key = _token_key(live) if live else None
+    profiles = sorted(
+        _read_account_profiles(),
+        key=lambda meta: meta.get("last_used_at") or meta.get("added_at") or 0,
+        reverse=True,
+    )
+    accounts = [
+        {
+            "slug": profile.get("slug", ""),
+            "email": profile.get("email", ""),
+            "name": profile.get("name", ""),
+            "picture": profile.get("picture", ""),
+            "active": bool(active_key and profile.get("token_key") == active_key),
+            "last_used_at": profile.get("last_used_at"),
+        }
+        for profile in profiles
+    ]
+    return {"accounts": accounts, "active_email": (active or {}).get("email", "")}
+
+
+def switch_to_saved_colab_account(slug: str) -> dict[str, Any]:
+    safe_slug = _account_slug(slug)
+    base = f"{ACCOUNTS_DIR}/{safe_slug}"
+    token_text = _wsl_read_text(f"{base}/token.json")
+    if not token_text:
+        state = {**_default_state(), **_environment_status()}
+        state["state"] = "error"
+        state["error"] = "That saved Google account is no longer available. Add it again."
+        state["updated_at"] = time.time()
+        _write_state(state)
+        return get_colab_runtime_status()
+
+    # Preserve whatever account is live now before we overwrite the token.
+    _capture_active_account()
+    stop_colab_runtime()
+
+    # Restore the saved token and drop the session list so the launcher runs
+    # `colab new` under this account. A valid refresh token means colab-cli
+    # authenticates silently — no browser, no pasted code.
+    if not _wsl_write_text(LIVE_TOKEN_PATH, token_text):
+        state = {**_default_state(), **_environment_status()}
+        state["state"] = "error"
+        state["error"] = "Unable to restore the saved Google account token in WSL."
+        state["updated_at"] = time.time()
+        _write_state(state)
+        return get_colab_runtime_status()
+    _run_wsl(
+        "rm -f "
+        f"{COLAB_CONFIG_DIR}/sessions.json "
+        f"{COLAB_CONFIG_DIR}/sessions.json.lock",
+        timeout=20,
+    )
+    if not _release_oauth_callback_port():
+        state = {**_default_state(), **_environment_status()}
+        state["state"] = "error"
+        state["error"] = "Unable to release the Google OAuth callback port 8200 in WSL."
+        state["updated_at"] = time.time()
+        _write_state(state)
+        return get_colab_runtime_status()
+
+    meta_text = _wsl_read_text(f"{base}/meta.json")
+    if meta_text:
+        try:
+            meta = json.loads(meta_text)
+        except json.JSONDecodeError:
+            meta = {}
+        if isinstance(meta, dict):
+            meta["slug"] = safe_slug
+            meta["last_used_at"] = time.time()
+            _write_account_profile(safe_slug, token_text, meta)
+            _set_active_account_state(meta)
+    return start_colab_runtime()
+
+
+def remove_colab_account(slug: str) -> dict[str, Any]:
+    safe_slug = _account_slug(slug)
+    _run_wsl(f"rm -rf {shlex.quote(ACCOUNTS_DIR + '/' + safe_slug)}", timeout=20)
+    return list_colab_accounts()
 
 
 def _release_oauth_callback_port() -> bool:
@@ -1263,6 +1560,9 @@ def _default_state() -> dict[str, Any]:
         "quota_state": "unknown",
         "quota_message": "Google does not expose a numeric free-tier quota API.",
         "account_hint": "",
+        "account_email": "",
+        "account_name": "",
+        "account_picture": "",
         "authorization_url": "",
         "needs_auth_code": False,
         "session_started_at": None,

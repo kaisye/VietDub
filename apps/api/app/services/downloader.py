@@ -208,6 +208,14 @@ def _acquire_source(
                         "Export browser cookies to a Netscape cookies.txt file and set AETHER_DOUYIN_COOKIES_FILE, "
                         "or set AETHER_DOUYIN_COOKIES_FROM_BROWSER=chrome/edge after closing that browser."
                     ) from ytdlp_error
+                if _is_facebook_profile_url(source):
+                    raise RuntimeError(
+                        "Không tải được video Facebook: đây là link TRANG CÁ NHÂN (profile), không phải "
+                        "link video. Hãy mở đúng video/reel cần dịch, bấm dấu ⋯ (3 chấm) ở góc video rồi "
+                        "chọn “Sao chép liên kết”, sau đó dán link đó. Link hợp lệ có dạng: "
+                        "facebook.com/.../videos/..., facebook.com/watch?v=..., facebook.com/reel/... "
+                        "hoặc fb.watch/..."
+                    ) from ytdlp_error
                 raise RuntimeError(f"Unable to download video with yt-dlp: {ytdlp_error}") from ytdlp_error
             try:
                 return _download_direct(source, root, job.id)
@@ -476,6 +484,38 @@ def _is_douyin_url(url: str) -> bool:
 def _needs_douyin_cookies(error: Exception) -> bool:
     message = str(error).casefold()
     return "fresh cookies" in message or "cookies" in message
+
+
+# Facebook path segments that mark real content (video/reel/etc.) rather than a
+# person's profile page. A bare ``/<username>`` outside this set is a profile.
+_FACEBOOK_CONTENT_SEGMENTS = {
+    "watch", "reel", "reels", "video", "videos", "story.php", "permalink.php",
+    "share", "groups", "pages", "marketplace", "events", "gaming", "live",
+    "photo.php", "media", "v",
+}
+
+
+def _is_facebook_profile_url(url: str) -> bool:
+    """True for a Facebook *profile/page* URL that contains no specific video.
+
+    Users commonly paste a person's profile link (``/people/<name>/<id>/``,
+    ``/profile.php?id=...`` or a bare ``/<username>``) expecting a download;
+    yt-dlp rightly rejects it as an Unsupported URL because there is no video
+    there. Detect that shape so we can show actionable guidance instead of a
+    raw error. ``fb.watch`` is always a video link, so it never matches.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not (host == "facebook.com" or host.endswith(".facebook.com") or host == "fb.com"):
+        return False
+    path = parsed.path or "/"
+    lowered = path.lower()
+    if lowered.startswith("/people/") or lowered.startswith("/profile.php"):
+        return True
+    segments = [seg for seg in path.split("/") if seg]
+    # A single path segment that is not a known content keyword is a username
+    # root (the profile page), e.g. facebook.com/Hansa.
+    return len(segments) == 1 and segments[0].lower() not in _FACEBOOK_CONTENT_SEGMENTS
 
 
 def _download_quality(job: MediaJob, override: str | None = None) -> str:

@@ -46,6 +46,8 @@ from .schemas import (
     MediaJobOut,
     MediaJobOutputOut,
     MediaJobPatch,
+    ColabAccountSwitchIn,
+    ColabAccountsOut,
     ColabAuthCodeIn,
     OmniVoiceLocalSetupOut,
     OmniVoiceLocalStatusOut,
@@ -138,10 +140,13 @@ from .services.omnivoice_local_setup import (
 from .services.omnivoice_colab_runtime import (
     get_colab_runtime_status,
     install_colab_cli,
+    list_colab_accounts,
+    remove_colab_account,
     start_colab_runtime,
     stop_colab_runtime,
     submit_colab_auth_code,
     switch_colab_account,
+    switch_to_saved_colab_account,
 )
 from .services.storage import ensure_storage
 from .services.progress import get_progress_detail
@@ -705,6 +710,33 @@ def submit_colab_omnivoice_auth_code(payload: ColabAuthCodeIn) -> OmniVoiceColab
 @app.post("/settings/runtime/omnivoice/colab/switch-account")
 def switch_colab_omnivoice_account() -> OmniVoiceColabStatusOut:
     return OmniVoiceColabStatusOut.model_validate(switch_colab_account())
+
+
+@app.get(
+    "/settings/runtime/omnivoice/colab/accounts", response_model=ColabAccountsOut
+)
+def list_colab_omnivoice_accounts() -> ColabAccountsOut:
+    return ColabAccountsOut.model_validate(list_colab_accounts())
+
+
+@app.post(
+    "/settings/runtime/omnivoice/colab/accounts/switch",
+    response_model=OmniVoiceColabStatusOut,
+)
+def switch_colab_omnivoice_saved_account(
+    payload: ColabAccountSwitchIn,
+) -> OmniVoiceColabStatusOut:
+    return OmniVoiceColabStatusOut.model_validate(
+        switch_to_saved_colab_account(payload.slug)
+    )
+
+
+@app.delete(
+    "/settings/runtime/omnivoice/colab/accounts/{slug}",
+    response_model=ColabAccountsOut,
+)
+def remove_colab_omnivoice_account(slug: str) -> ColabAccountsOut:
+    return ColabAccountsOut.model_validate(remove_colab_account(slug))
 
 
 @app.delete("/settings/runtime/omnivoice/colab", response_model=OmniVoiceColabStatusOut)

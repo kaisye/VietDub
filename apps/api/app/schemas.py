@@ -848,6 +848,24 @@ class ColabAuthCodeIn(BaseModel):
     code: str = Field(min_length=1, max_length=2048)
 
 
+class ColabAccountSwitchIn(BaseModel):
+    slug: str = Field(min_length=1, max_length=200)
+
+
+class ColabAccountOut(BaseModel):
+    slug: str
+    email: str = ""
+    name: str = ""
+    picture: str = ""
+    active: bool = False
+    last_used_at: float | None = None
+
+
+class ColabAccountsOut(BaseModel):
+    accounts: list[ColabAccountOut] = []
+    active_email: str = ""
+
+
 class OmniVoiceColabStatusOut(BaseModel):
     state: str
     reachable: bool = False
@@ -858,6 +876,9 @@ class OmniVoiceColabStatusOut(BaseModel):
     quota_state: str = "unknown"
     quota_message: str = ""
     account_hint: str = ""
+    account_email: str = ""
+    account_name: str = ""
+    account_picture: str = ""
     session_started_at: float | None = None
     session_age_seconds: int | None = None
     updated_at: float | None = None

@@ -178,6 +178,9 @@ export type OmniVoiceColabStatus = {
   quota_state: "available" | "exhausted" | "unknown" | string;
   quota_message: string;
   account_hint: string;
+  account_email: string;
+  account_name: string;
+  account_picture: string;
   session_started_at: number | null;
   session_age_seconds: number | null;
   updated_at: number | null;
@@ -193,6 +196,20 @@ export type OmniVoiceColabStatus = {
   session_name: string;
   setup_command: string;
   log_path: string;
+};
+
+export type ColabAccount = {
+  slug: string;
+  email: string;
+  name: string;
+  picture: string;
+  active: boolean;
+  last_used_at: number | null;
+};
+
+export type ColabAccounts = {
+  accounts: ColabAccount[];
+  active_email: string;
 };
 
 export type OmniVoiceLocalSetup = {

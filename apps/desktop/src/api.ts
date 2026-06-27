@@ -1,4 +1,5 @@
 import type {
+  ColabAccounts,
   CreatedMediaJob,
   Job,
   JobOutput,
@@ -9,6 +10,8 @@ import type {
   RuntimeOptions,
   RuntimeSettings,
   SourceVideoUpload,
+  SubtitleStyle,
+  SubtitleStylePreset,
   SubtitleStyles,
   VoiceProfile,
   WorkspaceSettings,
@@ -106,6 +109,23 @@ export const setupColabCli = () =>
 export const switchColabAccount = () =>
   request<OmniVoiceColabStatus>(`${COLAB_BASE}/switch-account`, { method: "POST" });
 
+/** List Google accounts saved from previous Colab logins. */
+export const getColabAccounts = () =>
+  request<ColabAccounts>(`${COLAB_BASE}/accounts`, { cache: "no-store" });
+
+/** Switch to a previously used Google account without a fresh browser login. */
+export const switchColabSavedAccount = (slug: string) =>
+  request<OmniVoiceColabStatus>(`${COLAB_BASE}/accounts/switch`, {
+    method: "POST",
+    body: JSON.stringify({ slug }),
+  });
+
+/** Forget a saved Google account (removes its archived token). */
+export const removeColabAccount = (slug: string) =>
+  request<ColabAccounts>(`${COLAB_BASE}/accounts/${encodeURIComponent(slug)}`, {
+    method: "DELETE",
+  });
+
 export const submitColabAuthCode = (code: string) =>
   request<OmniVoiceColabStatus>(`${COLAB_BASE}/auth-code`, {
     method: "POST",
@@ -132,6 +152,18 @@ export const updateWorkspaceSettings = (body: Partial<WorkspaceSettings>) =>
 
 export const getSubtitleStyles = () =>
   request<SubtitleStyles>("/subtitle-styles", { cache: "no-store" });
+
+/** Save the current subtitle styling as a reusable named preset. */
+export const createSubtitleStyle = (payload: {
+  name: string;
+  style: Partial<SubtitleStyle>;
+  id?: string;
+  make_active?: boolean;
+}) =>
+  request<SubtitleStylePreset>("/subtitle-styles", {
+    method: "POST",
+    body: JSON.stringify({ make_active: false, ...payload }),
+  });
 
 export function voicePreviewUrl(voiceId: string) {
   return `${API_BASE_URL}/voice-options/${encodeURIComponent(voiceId)}/preview`;
