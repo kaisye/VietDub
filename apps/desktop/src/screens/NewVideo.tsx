@@ -1428,12 +1428,13 @@ function SubtitleStep({
     const box = subtitleBoxRef.current?.getBoundingClientRect();
     const drag = dragRef.current;
     if (!frame || !box || !drag) return;
-    const halfWidth = Math.min(0.45, box.width / Math.max(1, frame.width) / 2);
     const halfHeight = Math.min(0.45, box.height / Math.max(1, frame.height) / 2);
+    // position_x marks the render anchor point; edge-anchoring (left/right) keeps
+    // the box on-screen at the extremes, so it only needs the 0.05–0.95 clamp.
     const x = clampNumber(
       (event.clientX - drag.offsetX - frame.left) / Math.max(1, frame.width),
-      Math.max(0.05, halfWidth),
-      Math.min(0.95, 1 - halfWidth),
+      0.05,
+      0.95,
     );
     // position_y = center of text block; allow center to go near the edges
     const y = clampNumber(
@@ -1452,8 +1453,13 @@ function SubtitleStep({
     const box = subtitleBoxRef.current?.getBoundingClientRect();
     if (!box) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    // position_x is the render anchor point: the box's left edge (<=0.33), right
+    // edge (>=0.67) or center otherwise. Offset from that same anchor so the
+    // cursor maps straight onto position_x while dragging.
+    const px = Number(effectiveStyle.position_x ?? 0.5);
+    const anchorX = px <= 0.33 ? box.left : px >= 0.67 ? box.right : box.left + box.width / 2;
     dragRef.current = {
-      offsetX: event.clientX - (box.left + box.width / 2),
+      offsetX: event.clientX - anchorX,
       offsetY: event.clientY - (box.top + box.height / 2),
     };
     setInteraction("drag");

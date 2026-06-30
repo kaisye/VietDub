@@ -124,7 +124,7 @@ function Section({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function FeaturesScreen() {
+export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?: () => void }) {
   const { t } = useT();
   const [settings, setSettings] = useState<RuntimeSettings | null>(null);
   const [options, setOptions] = useState<RuntimeOptions | null>(null);
@@ -209,19 +209,28 @@ export default function FeaturesScreen() {
       {!hasCuda && (
         <div className="banner info" style={{ marginBottom: 16 }}>
           {hasGpu ? (
-            isVI ? (
-              <>
-                Máy có <strong>{options.gpus[0]?.name}</strong>, nhưng PyTorch hiện là bản CPU nên CUDA chưa bật.{" "}
-                <strong>Edge</strong> (giọng đám mây) vẫn dùng đầy đủ. Muốn chạy{" "}
-                <strong>OmniVoice</strong> trên GPU thì cài lại PyTorch bản CUDA cho môi trường backend.
-              </>
-            ) : (
-              <>
-                This machine has <strong>{options.gpus[0]?.name}</strong>, but PyTorch is a CPU-only build so CUDA is off.{" "}
-                <strong>Edge</strong> (cloud voices) still works fully. To run{" "}
-                <strong>OmniVoice</strong> on the GPU, reinstall the CUDA build of PyTorch in the backend environment.
-              </>
-            )
+            <>
+              <div>
+                {isVI ? (
+                  <>
+                    Máy có <strong>{options.gpus[0]?.name}</strong>, nhưng PyTorch hiện là bản CPU nên CUDA chưa bật.{" "}
+                    <strong>Edge</strong> (giọng đám mây) vẫn dùng đầy đủ. Muốn chạy <strong>OmniVoice</strong> trên GPU,
+                    cài đặt môi trường GPU (PyTorch bản CUDA) bằng nút bên dưới.
+                  </>
+                ) : (
+                  <>
+                    This machine has <strong>{options.gpus[0]?.name}</strong>, but PyTorch is a CPU-only build so CUDA is off.{" "}
+                    <strong>Edge</strong> (cloud voices) still works fully. To run <strong>OmniVoice</strong> on the GPU,
+                    set up the GPU environment (CUDA build of PyTorch) with the button below.
+                  </>
+                )}
+              </div>
+              {onOpenVoiceSetup && (
+                <button className="btn primary" style={{ marginTop: 10 }} onClick={onOpenVoiceSetup}>
+                  {isVI ? "Cài đặt GPU cho OmniVoice" : "Set up GPU for OmniVoice"}
+                </button>
+              )}
+            </>
           ) : isVI ? (
             <>
               Máy này chưa có GPU/CUDA — <strong>không sao cả</strong>. Bạn vẫn dùng được{" "}

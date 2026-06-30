@@ -40,10 +40,24 @@ export function subtitlePreviewStyle(
   // including portrait 9:16 where cqh-based sizing was ~2.3× too large.
   const fontSizeCqw = clamp(normalized.font_size, 8, 72) / 5.12;
 
+  // Horizontal anchor must mirror the renderer (_srt_to_ass uses \an4/\an5/\an6):
+  // the subtitle is left-anchored for position_x <= 0.33 (text grows right),
+  // right-anchored for >= 0.67 (text grows left), and centered in between. This
+  // keeps the box fully on-screen at the edges instead of always centering on
+  // the point, which let it run off (and collapse) past the frame.
+  const positionX = clamp(normalized.position_x, 0.05, 0.95);
+  const anchorX = positionX <= 0.33 ? "0%" : positionX >= 0.67 ? "-100%" : "-50%";
+
   return {
-    left: `${clamp(normalized.position_x, 0.05, 0.95) * 100}%`,
+    left: `${positionX * 100}%`,
     top: `${positionY * 100}%`,
-    transform: "translate(-50%, -50%)",
+    transform: `translate(${anchorX}, -50%)`,
+    // max-content keeps the box at its natural width regardless of horizontal
+    // position. With auto width the absolutely-positioned box's available width
+    // is `frameWidth - left`, so dragging it right shrank the wrap width and
+    // collapsed the text into a tiny cropped box.
+    width: "max-content",
+    maxWidth: "82%",
     color: normalized.text_color,
     backgroundColor: hexToRgba(normalized.box_color, normalized.box_opacity),
     backdropFilter: normalized.box_blur > 0 ? `blur(${normalized.box_blur}px)` : undefined,

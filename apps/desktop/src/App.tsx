@@ -243,7 +243,7 @@ function AppInner() {
         ) : view === "history" ? (
           <HistoryScreen onOpen={openJob} onEdit={editJob} />
         ) : view === "features" ? (
-          <FeaturesScreen />
+          <FeaturesScreen onOpenVoiceSetup={() => setView("voices")} />
         ) : view === "progress" && activeJobId ? (
           <ProgressScreen jobId={activeJobId} onBack={() => setView("new")} />
         ) : (
