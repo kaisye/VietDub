@@ -27,6 +27,14 @@ WSL_DISTRO = os.getenv("AETHER_COLAB_WSL_DISTRO", "").strip()
 PREFERRED_WSL_DISTROS = ("Ubuntu-24.04", "Ubuntu")
 COLAB_GPU = os.getenv("AETHER_COLAB_GPU", "T4").strip() or "T4"
 COLAB_BIN = os.getenv("AETHER_COLAB_BIN", "/root/.local/bin/colab").strip() or "/root/.local/bin/colab"
+# google-colab-cli 0.6.0 calls jupyter_kernel_client.KernelClient but declares
+# the dependency unpinned. jupyter-kernel-client 1.0.0 renamed that class to
+# JupyterKernelClient and dropped the old name, so an unconstrained install now
+# resolves to 1.x and every `colab exec` dies with "module
+# 'jupyter_kernel_client' has no attribute 'KernelClient'". 0.9 is the
+# floor because colab-cli also reads the top-level JupyterSubprotocol added there.
+KERNEL_CLIENT_PIN = "jupyter-kernel-client>=0.9,<1"
+
 READY_PREFIX = "AETHER_OMNIVOICE_READY="
 STATE_PREFIX = "AETHER_OMNIVOICE_STATE="
 
@@ -364,16 +372,36 @@ def _launch_worker() -> None:
                 _update_state(account_hint=account_match.group(1))
 
         bootstrap_path = _write_bootstrap_script()
+        exec_arguments = [
+            "exec", "-s", SESSION_NAME,
+            "-f", _windows_to_wsl_path(bootstrap_path),
+            "--timeout", str(_exec_timeout_seconds()),
+        ]
+        output: list[str] = []
         result = _run_colab_streaming(
-            [
-                "exec", "-s", SESSION_NAME,
-                "-f", _windows_to_wsl_path(bootstrap_path),
-                "--timeout", str(_exec_timeout_seconds()),
-            ],
-            parse_bootstrap=True,
+            exec_arguments, parse_bootstrap=True, sink=output
         )
         if _stop_requested.is_set():
             return
+        if result != 0 and _broken_kernel_client("".join(output)):
+            # Copies installed before KERNEL_CLIENT_PIN existed resolved to
+            # jupyter-kernel-client 1.x. The UI only offers the install button
+            # while the CLI is missing, so repair here rather than leaving the
+            # user with a permanently broken install and no way to redo it.
+            _update_state(
+                state="installing",
+                quota_message="Repairing google-colab-cli dependencies.",
+                error=None,
+            )
+            if not _repair_colab_cli():
+                raise RuntimeError(_failure_message(_read_log()))
+            _update_state(state="starting", error=None)
+            output = []
+            result = _run_colab_streaming(
+                exec_arguments, parse_bootstrap=True, sink=output
+            )
+            if _stop_requested.is_set():
+                return
         # The bootstrap cell runs for the whole session, so exec returning means
         # the session ended (timeout/disconnect). Only treat that as an error if
         # the runtime is genuinely unreachable — a tunnel that is still healthy
@@ -398,19 +426,30 @@ def _launch_worker() -> None:
         )
 
 
-def _install_worker() -> None:
-    command = (
+def _install_command() -> str:
+    return (
         "set -e; "
         "export PATH=\"$HOME/.local/bin:$PATH\"; "
         "if ! command -v uv >/dev/null 2>&1; then "
         "curl -LsSf https://astral.sh/uv/install.sh | sh; "
         "fi; "
         "export PATH=\"$HOME/.local/bin:$PATH\"; "
-        "uv tool install --python 3.12 --force google-colab-cli; "
+        "uv tool install --python 3.12 --force "
+        f"--with {shlex.quote(KERNEL_CLIENT_PIN)} google-colab-cli; "
         "colab version"
     )
+
+
+def _repair_colab_cli() -> bool:
+    """Reinstall the CLI with the pin applied. True when it succeeds."""
+    result = _run_wsl(_install_command(), timeout=900)
+    _append_log(result.stdout)
+    return result.returncode == 0
+
+
+def _install_worker() -> None:
     _clear_log()
-    result = _run_wsl(command, timeout=900)
+    result = _run_wsl(_install_command(), timeout=900)
     _append_log(result.stdout)
     if result.returncode == 0:
         state = {**_read_state(), **_environment_status()}
@@ -477,7 +516,12 @@ def _run_colab_interactive(arguments: list[str]) -> int:
                 _active_process = None
 
 
-def _run_colab_streaming(arguments: list[str], *, parse_bootstrap: bool = False) -> int:
+def _run_colab_streaming(
+    arguments: list[str],
+    *,
+    parse_bootstrap: bool = False,
+    sink: list[str] | None = None,
+) -> int:
     command = _colab_shell_command(arguments)
     process = subprocess.Popen(
         _wsl_args(command),
@@ -496,6 +540,8 @@ def _run_colab_streaming(arguments: list[str], *, parse_bootstrap: bool = False)
         if process.stdout:
             for line in process.stdout:
                 _append_log(line)
+                if sink is not None:
+                    sink.append(line)
                 auth_url = _authorization_url(line)
                 if auth_url:
                     _update_state(
@@ -1470,9 +1516,25 @@ def _quota_message_from_error(message: str) -> str:
     return "The Colab CLI could not start OmniVoice. Review the runtime log for details."
 
 
+_KERNEL_CLIENT_ERROR = re.compile(
+    r"module ['\"]?jupyter_kernel_client['\"]? has no attribute ['\"]?KernelClient",
+    re.IGNORECASE,
+)
+
+
+def _broken_kernel_client(output: str) -> bool:
+    return bool(_KERNEL_CLIENT_ERROR.search(output))
+
+
 def _failure_message(output: str) -> str:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     last = lines[-1] if lines else "Colab CLI command failed."
+    if _broken_kernel_client(output):
+        return (
+            "google-colab-cli was installed against jupyter-kernel-client 1.x, "
+            "which removed the KernelClient class it calls. Reinstalling the "
+            f"Colab CLI pins it to {KERNEL_CLIENT_PIN}."
+        )
     if "invalid_grant" in last.lower() or "invalidgranterror" in last.lower():
         return (
             "The Google authorization code was invalid or expired. "
