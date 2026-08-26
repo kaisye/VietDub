@@ -39,6 +39,21 @@ jobs:
             echo "::error::Missing VIETDUB_PUBLIC_RELEASE_TOKEN. Add a fine-grained PAT for kaisye/VietDubPublic with Contents: Read and write."
             exit 1
           fi
+          # A present-but-expired PAT used to get all the way to the publish step
+          # and fail there with "Bad credentials", after a full build on both
+          # runners. Fine-grained PATs expire, so check the token is still live
+          # before spending ~20 minutes compiling. GitHub answers 401 for a bad
+          # token even on a public repository, so a 200 here means it is valid --
+          # it does not prove the token still carries Contents: write.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $VIETDUB_PUBLIC_RELEASE_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/kaisye/VietDubPublic)
+          if [ "$status" != "200" ]; then
+            echo "::error::VIETDUB_PUBLIC_RELEASE_TOKEN was rejected by the GitHub API (HTTP $status). The fine-grained PAT has most likely expired -- regenerate it for kaisye/VietDubPublic with Contents: Read and write, then update the repository secret."
+            exit 1
+          fi
+          echo "Release token accepted by the GitHub API."
 
       - uses: actions/setup-python@v6
         with:
