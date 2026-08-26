@@ -39,3 +39,6 @@ omnivoice/*.WAV
 omnivoice/*.mp3
 omnivoice/*.flac
 omnivoice/outputs/
+
+# Log cua backend dev do launch.bat ghi ra
+backend-dev.log
