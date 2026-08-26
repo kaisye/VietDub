@@ -1812,6 +1812,13 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
     }
   }
 
+  /** Message out of a rejected Tauri invoke, which rejects with a bare string. */
+  function invokeErrorMessage(error: unknown): string {
+    if (typeof error === "string") return error.trim();
+    if (error instanceof Error) return error.message.trim();
+    return "";
+  }
+
   async function handleColabAction(action: () => Promise<OmniVoiceColabStatus>) {
     setColabBusy(true);
     try {
@@ -1855,7 +1862,10 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
       // usable. Always stop here so the required reboot can complete cleanly.
       setWslSetupMessage(t.colab_wsl_install_complete);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t.colab_wsl_install_failed);
+      // Tauri rejects with the command's Err value as-is -- a plain string, not
+      // an Error -- so an instanceof check always missed and buried the real
+      // reason behind the generic "accept the Administrator prompt" message.
+      setError(invokeErrorMessage(e) || t.colab_wsl_install_failed);
     } finally {
       setColabBusy(false);
     }

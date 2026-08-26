@@ -356,13 +356,39 @@ async fn install_wsl_ubuntu() -> Result<(), String> {
 fn install_wsl_ubuntu_blocking() -> Result<(), String> {
     // Keep this command fixed: the UI cannot inject arbitrary elevated shell
     // arguments. Start-Process is used solely to request the Windows UAC prompt.
+    //
+    // --no-launch is only understood by newer wsl.exe builds; older ones reject
+    // the whole command line. A non-zero exit that is not a declined prompt is
+    // therefore retried without it, which costs a second prompt only on the
+    // machines that actually need it.
+    //
+    // A declined UAC prompt makes Start-Process throw rather than return a code,
+    // so it is caught and mapped to ERROR_CANCELLED (1223) to tell "the user
+    // said no" apart from "wsl.exe failed".
     let script = concat!(
-        "$process = Start-Process -FilePath 'wsl.exe' ",
-        "-ArgumentList @('--install','-d','Ubuntu-24.04','--no-launch') ",
-        "-Verb RunAs -Wait -PassThru; ",
-        "if ($process.ExitCode -ne 0) { exit $process.ExitCode }"
+        "$p = $null\n",
+        "try {\n",
+        "  $p = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--install','-d','Ubuntu-24.04','--no-launch') -Verb RunAs -Wait -PassThru\n",
+        "} catch {\n",
+        "  [Console]::Error.WriteLine($_.Exception.Message)\n",
+        "  exit 1223\n",
+        "}\n",
+        "$code = 0\n",
+        "if ($null -ne $p.ExitCode) { $code = $p.ExitCode }\n",
+        "if ($code -ne 0) {\n",
+        "  [Console]::Error.WriteLine(\"wsl --install --no-launch exited $code; retrying without --no-launch\")\n",
+        "  try {\n",
+        "    $p = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--install','-d','Ubuntu-24.04') -Verb RunAs -Wait -PassThru\n",
+        "  } catch {\n",
+        "    [Console]::Error.WriteLine($_.Exception.Message)\n",
+        "    exit 1223\n",
+        "  }\n",
+        "  $code = 0\n",
+        "  if ($null -ne $p.ExitCode) { $code = $p.ExitCode }\n",
+        "}\n",
+        "exit $code\n"
     );
-    let status = Command::new("powershell.exe")
+    let output = Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -371,15 +397,26 @@ fn install_wsl_ubuntu_blocking() -> Result<(), String> {
             "-Command",
             script,
         ])
-        .status()
+        .output()
         .map_err(|error| format!("Unable to start the WSL installer: {error}"))?;
-    if status.success() {
-        Ok(())
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let code = output.status.code().unwrap_or(-1);
+    if code == 1223 {
+        return Err(
+            "The Windows Administrator prompt was declined, so WSL was not installed.".to_string(),
+        );
+    }
+    // The elevated child writes to its own console, so only PowerShell's own
+    // stderr reaches us -- still far better than reporting a bare exit code.
+    let detail = String::from_utf8_lossy(&output.stderr);
+    let detail = detail.trim();
+    if detail.is_empty() {
+        Err(format!("wsl --install failed with exit code {code}."))
     } else {
-        Err(format!(
-            "WSL installation was cancelled or failed (exit code {}).",
-            status.code().unwrap_or(-1)
-        ))
+        Err(format!("wsl --install failed with exit code {code}: {detail}"))
     }
 }
 
