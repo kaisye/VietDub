@@ -14,7 +14,11 @@ from .services.audio_cues import attach_background_audio, create_audio_cue_manif
 from .services.audio_bed import prepare_background_audio
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
-from .services.renderer import prepare_display_subtitle, render_video
+from .services.renderer import (
+    prepare_display_subtitle,
+    render_video,
+    source_language_subtitle_path,
+)
 from .services.production_configuration import (
     NO_SUBTITLE_STYLE_ID,
     ProductionConfiguration,
@@ -580,6 +584,9 @@ def _continue_after_source(
     segments_path = translated_segments_path(translated_subtitle_path)
     if segments_path.exists():
         _log_artifact(job, segments_path)
+    source_line_path = source_language_subtitle_path(translated_subtitle_path)
+    if source_line_path.exists():
+        _log_artifact(job, source_line_path)
 
     _continue_after_translation(
         db,

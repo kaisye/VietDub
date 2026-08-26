@@ -48,7 +48,7 @@ import {
   uploadSourceVideo,
   voicePreviewUrl,
 } from "../api";
-import { subtitlePreviewStyle } from "../lib/subtitle-style-preview";
+import { subtitlePreviewStyle, subtitleSecondaryPreviewStyle } from "../lib/subtitle-style-preview";
 import { SOURCE_LANGUAGE_OPTIONS, TARGET_LANGUAGE_OPTIONS } from "../lib/translation-languages";
 import type { SubtitleStyle, SubtitleStylePreset, VoiceProfile } from "../types";
 import { orderVoiceProfiles } from "../lib/voice-order";
@@ -1365,6 +1365,7 @@ function SubtitleStep({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const playheadPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const bilingualEnabled = Boolean(effectiveStyle.bilingual_enabled);
   const blurEnabled = Boolean(effectiveStyle.hard_sub_blur_enabled);
   const blurX = Number(effectiveStyle.hard_sub_blur_x ?? 0.5);
   const blurY = Number(effectiveStyle.hard_sub_blur_y ?? 0.86);
@@ -1746,12 +1747,16 @@ function SubtitleStep({
             {!subtitlesDisabled ? (
               <div
                 ref={subtitleBoxRef}
-                className={`absolute z-10 max-w-[82%] touch-none select-none text-center ${
+                className={`absolute z-10 touch-none select-none ${
                   interaction === "drag"
                     ? "cursor-grabbing ring-2 ring-[var(--primary)]"
                     : "cursor-grab ring-1 ring-white/35"
                 }`}
-                style={subtitlePreviewStyle(effectiveStyle, undefined, subtitle.max_lines)}
+                style={subtitlePreviewStyle(
+                  effectiveStyle,
+                  undefined,
+                  bilingualEnabled ? subtitle.max_lines * 2 : subtitle.max_lines,
+                )}
                 onPointerDown={handleSubtitlePointerDown}
                 onPointerMove={handleSubtitlePointerMove}
                 onPointerUp={stopSubtitleInteraction}
@@ -1760,6 +1765,20 @@ function SubtitleStep({
                 <span className="box-decoration-clone px-[0.45em] py-[0.18em]">
                   {t.sub_sample_text}
                 </span>
+                {bilingualEnabled ? (
+                  <>
+                    {/* Mirrors the renderer's \N break. Both spans are inline
+                        inside the -webkit-box, so without an explicit break the
+                        source line continues on the translated line, not under it. */}
+                    <br />
+                    <span
+                      className="box-decoration-clone px-[0.45em] py-[0.18em]"
+                      style={subtitleSecondaryPreviewStyle(effectiveStyle)}
+                    >
+                      {t.sub_sample_text_secondary}
+                    </span>
+                  </>
+                ) : null}
                 <span className="pointer-events-none absolute -left-3 -top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--primary)] text-white shadow-md">
                   <Move size={14} />
                 </span>
@@ -1963,6 +1982,36 @@ function SubtitleStep({
                   fallback="#000000"
                   onChange={(outline_color) => updateSubtitleStyle({ outline_color })}
                 />
+              </div>
+              <div className="grid grid-cols-[1fr_auto] items-center gap-3 border-t border-[var(--border)] pt-3.5">
+                <div>
+                  <p className="text-sm font-bold text-[var(--text-primary)]">{t.sub_bilingual_label}</p>
+                  <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{t.sub_bilingual_desc}</p>
+                </div>
+                <CompactToggle
+                  checked={bilingualEnabled}
+                  onChange={(bilingual_enabled) => updateSubtitleStyle({ bilingual_enabled })}
+                  label={t.sub_bilingual_label}
+                />
+                {bilingualEnabled ? (
+                  <div className="col-span-2 grid grid-cols-2 items-end gap-3">
+                    <Slider
+                      label={t.sub_bilingual_size}
+                      value={Math.round(Number(effectiveStyle.bilingual_font_scale ?? 0.72) * 100)}
+                      min={40}
+                      max={100}
+                      step={2}
+                      suffix="%"
+                      onChange={(percent) => updateSubtitleStyle({ bilingual_font_scale: percent / 100 })}
+                    />
+                    <SubtitleColorField
+                      label={t.sub_bilingual_color}
+                      value={String(effectiveStyle.bilingual_color ?? "#444444")}
+                      fallback="#444444"
+                      onChange={(bilingual_color) => updateSubtitleStyle({ bilingual_color })}
+                    />
+                  </div>
+                ) : null}
               </div>
               <div className="grid grid-cols-[1fr_auto] items-center gap-3 border-t border-[var(--border)] pt-3.5">
                 <div>

@@ -25,6 +25,11 @@ DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
     "position_x": 0.5,
     "position_y": 0.92,
     "bold": False,
+    # Bilingual burn-in: the source-language line is drawn under the translated
+    # line, one language per line, at bilingual_font_scale × the main font size.
+    "bilingual_enabled": False,
+    "bilingual_font_scale": 0.72,
+    "bilingual_color": "#444444",
     "hard_sub_blur_enabled": False,
     "hard_sub_blur_x": 0.5,
     "hard_sub_blur_y": 0.86,
@@ -39,6 +44,9 @@ DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
 HARD_SUB_BLUR_STYLES = ("box", "vertical", "horizontal")
 ASS_PLAY_RES_X = 384
 ASS_PLAY_RES_Y = 288
+# Companion SRT written next to the render subtitle, holding the source-language
+# text on the render subtitle's own timings. Bilingual burn-in reads it.
+SOURCE_LANGUAGE_SUBTITLE_SUFFIX = ".source.srt"
 
 
 def render_video(
@@ -156,6 +164,13 @@ def normalize_subtitle_style(style: dict[str, Any] | None = None) -> dict[str, A
     merged["position_x"] = _clamp_float(merged.get("position_x"), 0.05, 0.95, DEFAULT_SUBTITLE_STYLE["position_x"])
     merged["position_y"] = _clamp_float(merged.get("position_y"), 0.05, 0.95, DEFAULT_SUBTITLE_STYLE["position_y"])
     merged["bold"] = bool(merged.get("bold"))
+    merged["bilingual_enabled"] = bool(merged.get("bilingual_enabled"))
+    merged["bilingual_font_scale"] = _clamp_float(
+        merged.get("bilingual_font_scale"), 0.4, 1.0, DEFAULT_SUBTITLE_STYLE["bilingual_font_scale"]
+    )
+    merged["bilingual_color"] = _normalize_hex_color(
+        merged.get("bilingual_color"), DEFAULT_SUBTITLE_STYLE["bilingual_color"]
+    )
     merged["hard_sub_blur_enabled"] = bool(merged.get("hard_sub_blur_enabled"))
     merged["hard_sub_blur_x"] = _clamp_float(
         merged.get("hard_sub_blur_x"), 0.02, 0.98, DEFAULT_SUBTITLE_STYLE["hard_sub_blur_x"]
@@ -506,10 +521,37 @@ def _srt_to_ass(
     h_an = 4 if position_x <= 0.33 else 6 if position_x >= 0.67 else 5
     pos_tag = "{" + f"\\an{h_an}\\pos({round(position_x * width)},{round(position_y * height)})" + "}"
 
+    # Bilingual: the source-language line rides on the same Dialogue event as an
+    # inline \fs/\1c override, so both languages stay in one block that libass
+    # centers on position_y together. Separate events would drift apart whenever
+    # the translated line wrapped to a different number of lines.
+    secondary_cues: list[tuple[float, float, str]] = []
+    secondary_tag = ""
+    secondary_chars_per_line = chars_per_line
+    if configured.get("bilingual_enabled"):
+        secondary_path = source_language_subtitle_path(srt_path)
+        if secondary_path.exists():
+            secondary_cues = _parse_srt_for_ass(secondary_path)
+    if secondary_cues:
+        scale = float(configured["bilingual_font_scale"])
+        secondary_font_size = max(6, round(font_size * scale))
+        secondary_chars_per_line = max(15, round(chars_per_line / scale))
+        secondary_tag = (
+            "{" + f"\\fs{secondary_font_size}\\1c{_ass_color_tag(configured['bilingual_color'])}" + "}"
+        )
+
     for cue_start, cue_end, cue_text in srt_cues:
         sub_cues = _wrap_cue_for_ass(cue_text, cue_start, cue_end, chars_per_line, max_lines)
         for s_start, s_end, s_text in sub_cues:
             ass_text = s_text.replace("\n", r"\N")
+            if secondary_tag:
+                secondary_lines = _wrap_text_lines(
+                    _secondary_text_for_span(secondary_cues, s_start, s_end),
+                    secondary_chars_per_line,
+                    max_lines,
+                )
+                if secondary_lines:
+                    ass_text += r"\N" + secondary_tag + r"\N".join(secondary_lines)
             ass_lines.append(
                 f"Dialogue: 0,{_ass_time(s_start)},{_ass_time(s_end)},"
                 f"Default,,0,0,0,,{pos_tag}{ass_text}"
@@ -518,6 +560,53 @@ def _srt_to_ass(
     ass_path = srt_path.with_suffix(".render.ass")
     ass_path.write_text("\n".join(ass_lines) + "\n", encoding="utf-8-sig")
     return ass_path
+
+
+def source_language_subtitle_path(subtitle_path: Path) -> Path:
+    """Return the source-language companion for a render or display subtitle.
+
+    ``translate_subtitle`` writes ``<stem>.render.source.srt`` alongside
+    ``<stem>.render.srt``. ``prepare_display_subtitle`` later rewrites the render
+    subtitle into ``<stem>.render.display.srt``, so the ``.display`` marker is
+    dropped before resolving the companion — both point at the same source text.
+    """
+    stem = subtitle_path.stem
+    if stem.endswith(".display"):
+        stem = stem[: -len(".display")]
+    return subtitle_path.with_name(f"{stem}{SOURCE_LANGUAGE_SUBTITLE_SUFFIX}")
+
+
+def _secondary_text_for_span(
+    cues: list[tuple[float, float, str]],
+    start: float,
+    end: float,
+) -> str:
+    """Return the source-language text that belongs to one display cue.
+
+    Display wrapping splits a translated cue into consecutive time slices, so a
+    source cue can straddle several of them. A source cue that is mostly covered
+    contributes its whole text; a partly covered one contributes the matching
+    slice of its words, which keeps the source line moving with the translation
+    instead of repeating in full under every slice.
+    """
+    parts: list[str] = []
+    for cue_start, cue_end, cue_text in cues:
+        overlap = min(end, cue_end) - max(start, cue_start)
+        if overlap <= 0.01:
+            continue
+        duration = max(0.05, cue_end - cue_start)
+        if overlap >= duration * 0.85:
+            parts.append(cue_text)
+            continue
+        words = cue_text.split()
+        if not words:
+            continue
+        first = round(len(words) * max(0.0, max(start, cue_start) - cue_start) / duration)
+        last = round(len(words) * min(1.0, (min(end, cue_end) - cue_start) / duration))
+        sliced = words[first : max(first + 1, last)]
+        if sliced:
+            parts.append(" ".join(sliced))
+    return " ".join(parts).strip()
 
 
 def _subtitle_chars_per_line(
@@ -566,25 +655,7 @@ def _wrap_cue_for_ass(
     max_lines: int,
 ) -> list[tuple[float, float, str]]:
     """Word-wrap cue text and split into consecutive sub-cues of at most max_lines each."""
-    words = text.split()
-    if not words:
-        return [(start, end, text)]
-
-    wrapped = _balanced_ass_wrap(words, chars_per_line, max_lines)
-    if wrapped is None:
-        wrapped = []
-        current = ""
-        for word in words:
-            if not current:
-                current = word
-            elif len(current) + 1 + len(word) <= chars_per_line:
-                current += " " + word
-            else:
-                wrapped.append(current)
-                current = word
-        if current:
-            wrapped.append(current)
-
+    wrapped = _wrap_text_lines(text, chars_per_line, max_lines)
     if not wrapped:
         return [(start, end, text)]
 
@@ -605,6 +676,31 @@ def _wrap_cue_for_ass(
         g_end = round(start + duration * (i + 1) / n, 3)
         result.append((g_start, g_end, group))
     return result
+
+
+def _wrap_text_lines(text: str, chars_per_line: int, max_lines: int) -> list[str]:
+    """Word-wrap one line of text, preferring an even two-line split."""
+    words = text.split()
+    if not words:
+        return []
+
+    balanced = _balanced_ass_wrap(words, chars_per_line, max_lines)
+    if balanced is not None:
+        return balanced
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        if not current:
+            current = word
+        elif len(current) + 1 + len(word) <= chars_per_line:
+            current += " " + word
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _balanced_ass_wrap(
@@ -837,6 +933,12 @@ def _ass_color(hex_color: str, opacity: float = 1.0) -> str:
     blue = value[4:6]
     alpha = round((1.0 - _clamp_float(opacity, 0.0, 1.0, 1.0)) * 255)
     return f"&H{alpha:02X}{blue}{green}{red}"
+
+
+def _ass_color_tag(hex_color: str) -> str:
+    """Return an inline ``\\1c`` colour value (``&HBBGGRR&``, no alpha channel)."""
+    value = _normalize_hex_color(hex_color, "#FFFFFF").lstrip("#")
+    return f"&H{value[4:6]}{value[2:4]}{value[0:2]}&"
 
 
 def _normalize_hex_color(value: Any, fallback: str) -> str:

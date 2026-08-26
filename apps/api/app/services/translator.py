@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from .caption_text import remove_non_speech_tags
+from .renderer import source_language_subtitle_path
 from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_translation_hint
 from .storage import ensure_storage
@@ -109,7 +110,50 @@ def _translate_subtitle_source_first(
         json.dumps(translated_segments, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    _write_source_language_subtitle(destination, translated_segments)
     return destination
+
+
+def _write_source_language_subtitle(
+    destination: Path,
+    segments_payload: dict[str, object],
+) -> Path | None:
+    """Write the source-language SRT that bilingual burn-in draws underneath.
+
+    The cues carry the render subtitle's own timings, so the renderer can map a
+    display cue back to its source text by time even after display wrapping has
+    re-split the cues.
+
+    Nothing is written when every segment translated to itself — a same-language
+    job, or local generation that passes the source straight through — because a
+    bilingual render would then show the same line twice. Any file left by an
+    earlier run is removed in that case so it cannot be picked up as stale.
+    """
+    path = source_language_subtitle_path(destination)
+    segments = segments_payload.get("segments") or []
+    untranslated = all(
+        str(segment.get("source_text") or "").strip() == str(segment.get("translated_text") or "").strip()
+        for segment in segments
+    )
+
+    blocks: list[str] = []
+    if not untranslated:
+        for segment in segments:
+            text = str(segment.get("source_text") or "").strip()
+            start = float(segment.get("start") or 0.0)
+            end = float(segment.get("end") or 0.0)
+            if not text or end <= start:
+                continue
+            blocks.append(
+                f"{len(blocks) + 1}\n{_format_srt_time(start)} --> {_format_srt_time(end)}\n{text}"
+            )
+
+    if not blocks:
+        path.unlink(missing_ok=True)
+        return None
+
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+    return path
 
 
 def translated_segments_path(render_subtitle_path: Path) -> Path:

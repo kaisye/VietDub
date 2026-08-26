@@ -72,6 +72,9 @@ export type SubtitleStyle = {
   position_x: number;
   position_y: number;
   bold: boolean;
+  bilingual_enabled?: boolean;
+  bilingual_font_scale?: number;
+  bilingual_color?: string;
   hard_sub_blur_enabled?: boolean;
   hard_sub_blur_x?: number;
   hard_sub_blur_y?: number;

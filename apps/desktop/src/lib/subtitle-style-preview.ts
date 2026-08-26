@@ -17,6 +17,9 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   position_x: 0.5,
   position_y: 0.92,
   bold: false,
+  bilingual_enabled: false,
+  bilingual_font_scale: 0.72,
+  bilingual_color: "#444444",
 };
 
 export function subtitlePreviewStyle(
@@ -40,24 +43,35 @@ export function subtitlePreviewStyle(
   // including portrait 9:16 where cqh-based sizing was ~2.3× too large.
   const fontSizeCqw = clamp(normalized.font_size, 8, 72) / 5.12;
 
-  // Horizontal anchor must mirror the renderer (_srt_to_ass uses \an4/\an5/\an6):
-  // the subtitle is left-anchored for position_x <= 0.33 (text grows right),
-  // right-anchored for >= 0.67 (text grows left), and centered in between. This
-  // keeps the box fully on-screen at the edges instead of always centering on
-  // the point, which let it run off (and collapse) past the frame.
+  // Horizontal anchor AND multi-line text alignment must mirror the renderer
+  // (_srt_to_ass uses \an4/\an5/\an6): left-anchored + left-aligned for
+  // position_x <= 0.33 (text grows right), right-anchored + right-aligned for
+  // >= 0.67 (text grows left), and centered in between. \anN drives both the
+  // anchor edge and how wrapped lines align inside the block, so the preview
+  // must do the same — always centering misplaced off-center multi-line cues.
   const positionX = clamp(normalized.position_x, 0.05, 0.95);
-  const anchorX = positionX <= 0.33 ? "0%" : positionX >= 0.67 ? "-100%" : "-50%";
+  const anchor = positionX <= 0.33 ? "left" : positionX >= 0.67 ? "right" : "center";
+  const anchorX = anchor === "left" ? "0%" : anchor === "right" ? "-100%" : "-50%";
+
+  // Wrap width must match the renderer's available text width, which is
+  // position-dependent because the ASS margins become one-sided once the
+  // subtitle leaves the center band (see _subtitle_chars_per_line):
+  //   position_x < 0.45 -> (1 - position_x);  > 0.55 -> position_x;  else full.
+  // A fixed 82% cap made centered cues wrap earlier than the render and
+  // off-center cues wrap at the wrong width, so line breaks diverged.
+  const maxWidthFraction =
+    positionX < 0.45 ? 1 - positionX : positionX > 0.55 ? positionX : 1;
 
   return {
     left: `${positionX * 100}%`,
     top: `${positionY * 100}%`,
     transform: `translate(${anchorX}, -50%)`,
-    // max-content keeps the box at its natural width regardless of horizontal
-    // position. With auto width the absolutely-positioned box's available width
-    // is `frameWidth - left`, so dragging it right shrank the wrap width and
-    // collapsed the text into a tiny cropped box.
+    textAlign: anchor,
+    // max-content keeps the box at its natural width for short cues; the
+    // position-aware maxWidth caps long cues at the same width the renderer
+    // wraps at. Auto width would instead collapse against the right frame edge.
     width: "max-content",
-    maxWidth: "82%",
+    maxWidth: `${Math.round(maxWidthFraction * 100)}%`,
     color: normalized.text_color,
     backgroundColor: hexToRgba(normalized.box_color, normalized.box_opacity),
     backdropFilter: normalized.box_blur > 0 ? `blur(${normalized.box_blur}px)` : undefined,
@@ -83,6 +97,19 @@ export function subtitlePreviewStyle(
     WebkitBoxOrient: "vertical",
     WebkitLineClamp: maxLines,
     overflow: "hidden",
+  };
+}
+
+/** Inline style for the bilingual source-language line drawn under the translation.
+ *  Mirrors the renderer's `{\fs..\1c..}` override: same font, scaled size, own colour. */
+export function subtitleSecondaryPreviewStyle(
+  style: Partial<SubtitleStyle> | undefined,
+): CSSProperties {
+  const normalized = { ...DEFAULT_SUBTITLE_STYLE, ...(style ?? {}) };
+  const scale = clamp(normalized.bilingual_font_scale ?? 0.72, 0.4, 1);
+  return {
+    fontSize: `clamp(6px, ${(clamp(normalized.font_size, 8, 72) / 5.12) * scale}cqw, 96px)`,
+    color: normalized.bilingual_color ?? "#444444",
   };
 }
 
