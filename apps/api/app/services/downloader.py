@@ -44,7 +44,8 @@ def download_reference_audio(video_url: str, audio_format: str = "wav") -> Path:
     """Download only the audio track of a supported media URL."""
     import yt_dlp
 
-    source = _resolve_video_source(_normalize_video_source(video_url))
+    pasted_source = _normalize_video_source(video_url)
+    source = _resolve_video_source(pasted_source)
     if not source or urlparse(source).scheme not in {"http", "https"}:
         raise ValueError("Video URL must be an HTTP(S) URL.")
     output_format = audio_format.strip().lower()
@@ -81,8 +82,12 @@ def download_reference_audio(video_url: str, audio_format: str = "wav") -> Path:
         with yt_dlp.YoutubeDL(options) as downloader:
             downloader.download([source])
     except Exception as exc:
-        fallback = _try_thirdparty_fallback(source, root, f"voice-{reference_id}")
+        fallback, fallback_failures = _try_thirdparty_fallback(
+            source, root, f"voice-{reference_id}", pasted_source
+        )
         if fallback is None:
+            if _is_douyin_url(source):
+                raise RuntimeError(_douyin_failure_message(fallback_failures)) from exc
             raise RuntimeError(f"Unable to download reference audio with yt-dlp: {exc}") from exc
         destination = root / "voice-references" / f"{reference_id}.{output_format}"
         try:
@@ -170,8 +175,10 @@ def _acquire_source(
     clip_seconds: int,
 ) -> Path:
     root = ensure_storage()
-    source = _normalize_video_source(job.video_url)
-    source = _resolve_video_source(source)
+    # Keep the pre-canonical URL: yt-dlp needs the canonical /video/<id> form,
+    # but the third-party fallback gets better CDN links from the original.
+    pasted_source = _normalize_video_source(job.video_url)
+    source = _resolve_video_source(pasted_source)
     if not source:
         raise ValueError("Video URL is required.")
 
@@ -199,14 +206,14 @@ def _acquire_source(
             if not _looks_like_direct_media_url(source):
                 if os.getenv("AETHER_ALLOW_SYNTHETIC_SOURCE") == "1":
                     return _create_synthetic_source(root, job.id)
-                fallback = _try_thirdparty_fallback(source, root, job.id)
+                fallback, fallback_failures = _try_thirdparty_fallback(
+                    source, root, job.id, pasted_source
+                )
                 if fallback is not None:
                     return fallback
-                if _is_douyin_url(source) and _needs_douyin_cookies(ytdlp_error):
+                if _is_douyin_url(source):
                     raise RuntimeError(
-                        "Unable to download Douyin video: Douyin requires fresh cookies for this URL. "
-                        "Export browser cookies to a Netscape cookies.txt file and set AETHER_DOUYIN_COOKIES_FILE, "
-                        "or set AETHER_DOUYIN_COOKIES_FROM_BROWSER=chrome/edge after closing that browser."
+                        _douyin_failure_message(fallback_failures)
                     ) from ytdlp_error
                 if _is_facebook_profile_url(source):
                     raise RuntimeError(
@@ -451,11 +458,19 @@ def _platform_http_headers(url: str) -> dict[str, str]:
     return {}
 
 
-def _try_thirdparty_fallback(source: str, root: Path, job_id: str) -> Path | None:
+def _try_thirdparty_fallback(
+    source: str, root: Path, job_id: str, original_url: str = ""
+) -> tuple[Path | None, list[str]]:
     """Last-resort Douyin/TikTok download via public downloader services.
 
-    Disabled unless AETHER_THIRDPARTY_DOWNLOAD_ENABLED is set. Returns a
-    validated video path, or None to preserve the existing yt-dlp error path.
+    Disabled when AETHER_THIRDPARTY_DOWNLOAD_ENABLED is off. Returns a validated
+    video path (or None to preserve the existing yt-dlp error path) plus the
+    per-provider failure reasons behind a None, which the caller surfaces to the
+    user — these are the only clue to why the last-resort path did not work.
+
+    ``original_url`` is the URL as the user pasted it, before canonicalization.
+    The providers mint different (and not equally valid) CDN links per URL form,
+    so both forms are offered; see download_via_thirdparty.
     """
     from .thirdparty_download import (
         download_via_thirdparty,
@@ -463,17 +478,21 @@ def _try_thirdparty_fallback(source: str, root: Path, job_id: str) -> Path | Non
         thirdparty_fallback_enabled,
     )
 
-    if not thirdparty_fallback_enabled() or not is_thirdparty_supported(source):
-        return None
+    if not is_thirdparty_supported(source):
+        return None, []
+    if not thirdparty_fallback_enabled():
+        return None, ["đã tắt qua AETHER_THIRDPARTY_DOWNLOAD_ENABLED"]
 
-    downloaded = download_via_thirdparty(source, root, job_id)
+    downloaded, failures = download_via_thirdparty(source, root, job_id, original_url)
     if downloaded is None:
-        return None
+        return None, failures
     try:
         _validate_video_file(downloaded)
-    except Exception:
-        return None
-    return downloaded
+    except Exception as exc:
+        # ffprobe rejected the file (or is missing). Report it: this used to be
+        # swallowed and misdiagnosed as a cookie problem.
+        return None, [*failures, f"kiểm tra file tải về thất bại: {exc}"]
+    return downloaded, failures
 
 
 def _is_douyin_url(url: str) -> bool:
@@ -481,9 +500,24 @@ def _is_douyin_url(url: str) -> bool:
     return host == "douyin.com" or host.endswith(".douyin.com")
 
 
-def _needs_douyin_cookies(error: Exception) -> bool:
-    message = str(error).casefold()
-    return "fresh cookies" in message or "cookies" in message
+def _douyin_failure_message(fallback_failures: list[str]) -> str:
+    """Explain a Douyin failure using what actually went wrong.
+
+    yt-dlp cannot extract Douyin at all right now: its extractor calls the web
+    detail API without the required X-Bogus/A-Bogus signature, gets an empty
+    body, and reports "Fresh cookies (not necessarily logged in) are needed"
+    for every video, working or not. Blaming cookies therefore told users
+    nothing and sent them after a fix that does not help, so the real cause —
+    why each fallback provider declined — is reported instead.
+    """
+    detail = "; ".join(fallback_failures) if fallback_failures else "không có provider nào chạy"
+    return (
+        "Không tải được video Douyin. yt-dlp hiện không trích xuất được Douyin "
+        "(thiếu chữ ký request), và các dịch vụ tải dự phòng cũng thất bại.\n"
+        f"Chi tiết: {detail}\n"
+        "Thường gặp nhất là dịch vụ dự phòng đang quá tải — hãy thử lại sau vài phút. "
+        "Nếu bài đăng là ảnh (图集), video riêng tư hoặc đã bị xoá thì không tải được."
+    )
 
 
 # Facebook path segments that mark real content (video/reel/etc.) rather than a
