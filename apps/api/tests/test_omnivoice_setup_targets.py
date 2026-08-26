@@ -14,6 +14,7 @@ import pytest
 from app.services.omnivoice_local_setup import (
     MANAGED_PYTHON_TARGETS,
     _compute_capability,
+    _driver_version,
     _managed_python_archive_name,
     _managed_python_path,
     _managed_python_url,
@@ -22,8 +23,11 @@ from app.services.omnivoice_local_setup import (
 from app.services.runtime_hardware import _parse_compute_capability
 
 
-def _select_with(capabilities):
-    gpus = [{"compute_capability": value} for value in capabilities]
+def _select_with(capabilities, driver="580.00"):
+    gpus = [
+        {"compute_capability": value, "driver_version": driver}
+        for value in capabilities
+    ]
     with patch("app.services.runtime_hardware._detect_nvidia_gpus", return_value=gpus):
         with patch("platform.system", return_value="Windows"):
             return _select_torch_target()
@@ -46,10 +50,38 @@ def test_torch_index_follows_compute_capability(capabilities, expected):
     assert _select_with(capabilities) == expected
 
 
-def test_unknown_capability_keeps_the_modern_wheel():
-    # Drivers too old to report compute_cap must not drag every card down to
-    # cu126; _verify catches a genuine mismatch before the venv is marked ready.
-    assert _select_with([None]) == "cu128"
+def test_unknown_capability_takes_the_wide_wheel():
+    # Only older driver branches fail to report compute_cap, and those sit on
+    # cards that may well be pre-Turing. cu126 spans sm_50..sm_90, so it is the
+    # safe pick for a card we could not measure; cu128 would exclude everything
+    # below sm_75 and buy nothing.
+    assert _select_with([None]) == "cu126"
+
+
+@pytest.mark.parametrize(
+    "driver, expected",
+    [
+        ("580.00", "cu128"),  # current branch
+        ("527.41", "cu128"),  # exactly the CUDA 12 floor on Windows
+        ("527.40", "cu118"),  # one build below it
+        ("452.39", "cu118"),  # exactly the CUDA 11.8 floor
+        ("452.06", "cpu"),    # below every CUDA wheel we ship
+    ],
+)
+def test_old_drivers_never_get_a_cuda_12_wheel(driver, expected):
+    # A CUDA 12 runtime cannot initialise on a pre-r525 driver no matter what
+    # the card supports: torch installs, then torch.cuda.is_available() is
+    # False -- after a ~2.5 GB download that told the user nothing.
+    assert _select_with(["8.9"], driver=driver) == expected
+
+
+def test_driver_version_parsing():
+    assert _driver_version({"driver_version": "527.41"}) == (527, 41)
+    # Linux reports three components; the third must not break the compare.
+    assert _driver_version({"driver_version": "525.60.13"}) == (525, 60)
+    assert _driver_version({"driver_version": "570"}) == (570, 0)
+    assert _driver_version({"driver_version": "Metal"}) is None
+    assert _driver_version({}) is None
 
 
 def test_no_gpu_falls_back_to_cpu():

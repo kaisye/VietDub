@@ -1929,8 +1929,9 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
   const setupTargetLabel =
     setupTarget === "cu128" ? t.setup_target_cu128
       : setupTarget === "cu126" ? t.setup_target_cu126
-        : setupTarget === "mps" ? t.setup_target_mps
-          : t.setup_target_cpu;
+        : setupTarget === "cu118" ? t.setup_target_cu118
+          : setupTarget === "mps" ? t.setup_target_mps
+            : t.setup_target_cpu;
   const setupStateLabel =
     setup?.state === "installing_python" ? t.setup_state_installing_python
       : setup?.state === "creating_venv" ? t.setup_state_creating_venv

@@ -36,7 +36,18 @@ REQUIREMENTS_PATH = RUNTIME_DIR / "requirements.txt"
 VENV_DIR = PROJECT_DIR / ".venv-omnivoice"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CUDA_LEGACY_INDEX = "https://download.pytorch.org/whl/cu126"
+TORCH_CUDA_OLD_DRIVER_INDEX = "https://download.pytorch.org/whl/cu118"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
+# PyTorch's CUDA 12 wheels bundle a CUDA 12.x runtime. NVIDIA's minor version
+# compatibility runs that on any r525+ driver, but an older driver cannot load
+# it at all: torch.cuda.is_available() comes back False after a ~2.5 GB
+# download, with nothing in the message saying the driver is the reason. The
+# cu118 wheels drop the floor to the r450/r452 branch and still ship sm_37+.
+CUDA12_MIN_DRIVER = {"Windows": (527, 41)}
+CUDA11_MIN_DRIVER = {"Windows": (452, 39)}
+CUDA12_MIN_DRIVER_DEFAULT = (525, 60)
+CUDA11_MIN_DRIVER_DEFAULT = (450, 80)
 
 # PyTorch's cu128 wheels are built for sm_75 and up -- sm_50..sm_70 were dropped
 # because CUDA 12.8 deprecates them. The cu126 wheels still cover sm_50..sm_90.
@@ -46,6 +57,7 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 # returning True, so nothing catches it until the first synthesis.
 CUDA_MODERN_MIN_CAPABILITY = (7, 5)
 CUDA_LEGACY_MIN_CAPABILITY = (5, 0)
+CUDA_OLD_DRIVER_MIN_CAPABILITY = (3, 7)
 MANAGED_PYTHON_VERSION = "3.12.13"
 MANAGED_PYTHON_BUILD = "20260610"
 
@@ -175,7 +187,7 @@ def _set_state(state: str, message: str) -> None:
 
 
 def _run_setup(base_python: list[str] | None, target: str) -> None:
-    global _state, _message, _error, _finished_at
+    global _state, _message, _error, _finished_at, _target
     venv_python = _venv_python()
     try:
         if base_python is None:
@@ -194,6 +206,8 @@ def _run_setup(base_python: list[str] | None, target: str) -> None:
             torch_cmd += ["--index-url", TORCH_CUDA_INDEX]
         elif target == "cu126":
             torch_cmd += ["--index-url", TORCH_CUDA_LEGACY_INDEX]
+        elif target == "cu118":
+            torch_cmd += ["--index-url", TORCH_CUDA_OLD_DRIVER_INDEX]
         elif target == "cpu":
             torch_cmd += ["--index-url", TORCH_CPU_INDEX]
         # "mps" uses the default PyPI index.
@@ -203,12 +217,40 @@ def _run_setup(base_python: list[str] | None, target: str) -> None:
         _run([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_PATH)])
 
         _set_state("verifying", "Verifying installation…")
-        _verify(venv_python, target)
+        ready_message = "OmniVoice environment is ready."
+        try:
+            _verify(venv_python, target)
+        except Exception as exc:
+            if not target.startswith("cu"):
+                raise
+            # A GPU wheel the driver cannot load used to end the setup at
+            # "Cài đặt thất bại" with no way forward -- the user cannot always
+            # update the driver. Swapping in the CPU build leaves them with a
+            # slower but working environment instead of nothing.
+            _log(f"[{_now()}] {target} unusable, falling back to CPU: {exc}\n")
+            _set_state(
+                "installing_torch",
+                "GPU build unusable — installing the CPU build of PyTorch…",
+            )
+            _run(
+                [
+                    str(venv_python), "-m", "pip", "install", "--force-reinstall",
+                    "torch", "torchaudio", "--index-url", TORCH_CPU_INDEX,
+                ]
+            )
+            _set_state("verifying", "Verifying installation…")
+            _verify(venv_python, "cpu")
+            with _lock:
+                _target = "cpu"
+            ready_message = (
+                "OmniVoice is ready on the CPU. The GPU build could not run on "
+                f"this machine ({exc}) — synthesis will be slower."
+            )
 
         clear_validation_cache()
         with _lock:
             _state = "ready"
-            _message = "OmniVoice environment is ready."
+            _message = ready_message
             _error = ""
             _finished_at = time.time()
         _log(f"[{_now()}] ready\n")
@@ -238,8 +280,30 @@ def _run(cmd: list[str]) -> None:
         )
 
 
+def _driver_note() -> str:
+    """The card and driver as nvidia-smi reports them, for error messages."""
+    try:
+        from .runtime_hardware import _detect_nvidia_gpus
+
+        gpus = _detect_nvidia_gpus()
+    except Exception:
+        gpus = []
+    if not gpus:
+        return "no NVIDIA GPU detected"
+    gpu = gpus[0]
+    name = str(gpu.get("name") or "unknown GPU")
+    driver = str(gpu.get("driver_version") or "unknown")
+    return f"{name}, driver {driver}"
+
+
 def _verify(venv_python: Path, target: str) -> None:
-    require_cuda = target in {"cu128", "cu126"}
+    require_cuda = target in {"cu128", "cu126", "cu118"}
+    floor = _minimum_driver(11 if target == "cu118" else 12)
+    unavailable = (
+        f"CUDA not available after install ({_driver_note()}). These PyTorch "
+        f"wheels need NVIDIA driver {floor[0]}.{floor[1]:02d} or newer. Update "
+        "the graphics driver, then run the setup again."
+    )
     # torch.cuda.is_available() only proves the driver loaded -- a wheel with no
     # SASS for this card still passes it and fails at the first kernel launch.
     # Compare the card against torch's own arch list and run one real kernel so
@@ -248,7 +312,7 @@ def _verify(venv_python: Path, target: str) -> None:
         [
             "import torch",
             f"if {require_cuda!r}:",
-            "    assert torch.cuda.is_available(), 'CUDA not available after install'",
+            f"    assert torch.cuda.is_available(), {unavailable!r}",
             "    major, minor = torch.cuda.get_device_capability()",
             "    arches = torch.cuda.get_arch_list()",
             "    if f'sm_{major}{minor}' not in arches:",
@@ -548,6 +612,29 @@ def _python_version(cmd: list[str]) -> tuple[int, int] | None:
         return None
 
 
+def _minimum_driver(cuda_major: int) -> tuple[int, int]:
+    system = platform.system()
+    if cuda_major == 11:
+        return CUDA11_MIN_DRIVER.get(system, CUDA11_MIN_DRIVER_DEFAULT)
+    return CUDA12_MIN_DRIVER.get(system, CUDA12_MIN_DRIVER_DEFAULT)
+
+
+def _driver_version(gpu: dict[str, Any]) -> tuple[int, int] | None:
+    """(major, minor) from nvidia-smi's driver_version.
+
+    Windows reports two components ("527.41"), Linux three ("525.60.13"); the
+    third is ignored so the two forms compare against the same floors.
+    """
+    raw = gpu.get("driver_version")
+    if not isinstance(raw, str):
+        return None
+    parts = raw.strip().split(".")
+    if not parts or not parts[0].isdigit():
+        return None
+    minor = parts[1] if len(parts) > 1 and parts[1].isdigit() else "0"
+    return int(parts[0]), int(minor)
+
+
 def _select_torch_target() -> str:
     if platform.system() == "Darwin":
         return "mps"
@@ -565,12 +652,30 @@ def _select_torch_target() -> str:
         for capability in (_compute_capability(gpu) for gpu in gpus)
         if capability is not None
     ]
-    if not capabilities:
-        # Driver too old to report compute_cap. Keep the modern wheel rather than
-        # downgrading every card we simply could not measure; _verify catches a
-        # mismatch before the environment is marked ready.
-        return "cu128"
-    best = max(capabilities)
+    best = max(capabilities) if capabilities else None
+    drivers = [
+        version
+        for version in (_driver_version(gpu) for gpu in gpus)
+        if version is not None
+    ]
+    driver = max(drivers) if drivers else None
+
+    if driver is not None and driver < _minimum_driver(12):
+        # No CUDA 12 runtime will initialise on this driver, whatever the card
+        # supports, so a cu12x wheel would download gigabytes and then fail
+        # torch.cuda.is_available().
+        if driver >= _minimum_driver(11) and (
+            best is None or best >= CUDA_OLD_DRIVER_MIN_CAPABILITY
+        ):
+            return "cu118"
+        return "cpu"
+
+    if best is None:
+        # nvidia-smi could not report compute_cap, which only happens on older
+        # driver branches. cu126 spans sm_50..sm_90, so it is the safe pick for
+        # a card we could not measure; cu128 would exclude everything below
+        # sm_75 and buy nothing in return.
+        return "cu126"
     if best >= CUDA_MODERN_MIN_CAPABILITY:
         return "cu128"
     if best >= CUDA_LEGACY_MIN_CAPABILITY:
