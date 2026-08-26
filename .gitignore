@@ -42,3 +42,6 @@ omnivoice/outputs/
 
 # Log cua backend dev do launch.bat ghi ra
 backend-dev.log
+
+# Sinh ra luc chay boi _materialize_requirements()
+omnivoice/requirements.txt
