@@ -125,14 +125,21 @@ def _detect_nvidia_gpus() -> list[dict[str, Any]]:
     executable = shutil.which("nvidia-smi")
     if not executable:
         return []
-    command = [
-        executable,
-        "--query-gpu=index,name,memory.total,driver_version",
-        "--format=csv,noheader,nounits",
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=8)
-    except (OSError, subprocess.SubprocessError):
+    # compute_cap decides which PyTorch CUDA wheel a card can actually run, but
+    # the field only exists on newer drivers -- nvidia-smi fails the whole query
+    # when it is unknown. Retry without it so an old driver still reports the
+    # GPU, just with compute_capability left as None.
+    fields = ("index,name,memory.total,driver_version,compute_cap",
+              "index,name,memory.total,driver_version")
+    result = None
+    for query in fields:
+        command = [executable, f"--query-gpu={query}", "--format=csv,noheader,nounits"]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=8)
+            break
+        except (OSError, subprocess.SubprocessError):
+            result = None
+    if result is None:
         return []
 
     gpus: list[dict[str, Any]] = []
@@ -151,9 +158,23 @@ def _detect_nvidia_gpus() -> list[dict[str, Any]]:
                 "name": parts[1],
                 "memory_gb": round(memory_gb, 1),
                 "driver_version": parts[3],
+                "compute_capability": _parse_compute_capability(
+                    parts[4] if len(parts) > 4 else ""
+                ),
             }
         )
     return gpus
+
+
+def _parse_compute_capability(value: str) -> str | None:
+    """Normalise nvidia-smi's compute_cap (e.g. ``5.0``); None when unavailable."""
+    text = value.strip()
+    if not text or text.lower().startswith(("n/a", "[not")):
+        return None
+    parts = text.split(".")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    return f"{int(parts[0])}.{int(parts[1])}"
 
 
 def _detect_apple_mps() -> dict[str, Any] | None:

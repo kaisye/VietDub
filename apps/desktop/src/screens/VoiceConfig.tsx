@@ -1918,8 +1918,9 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
   const setupTarget = setup?.target || (options && options.gpu_count > 0 ? "cu128" : "cpu");
   const setupTargetLabel =
     setupTarget === "cu128" ? t.setup_target_cu128
-      : setupTarget === "mps" ? t.setup_target_mps
-        : t.setup_target_cpu;
+      : setupTarget === "cu126" ? t.setup_target_cu126
+        : setupTarget === "mps" ? t.setup_target_mps
+          : t.setup_target_cpu;
   const setupStateLabel =
     setup?.state === "installing_python" ? t.setup_state_installing_python
       : setup?.state === "creating_venv" ? t.setup_state_creating_venv

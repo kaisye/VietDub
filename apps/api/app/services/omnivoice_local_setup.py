@@ -23,7 +23,7 @@ import tarfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -35,21 +35,51 @@ SOURCE_REQUIREMENTS_PATH = SOURCE_API_DIR / "app" / "assets" / "omnivoice-requir
 REQUIREMENTS_PATH = RUNTIME_DIR / "requirements.txt"
 VENV_DIR = PROJECT_DIR / ".venv-omnivoice"
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+TORCH_CUDA_LEGACY_INDEX = "https://download.pytorch.org/whl/cu126"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
+# PyTorch's cu128 wheels are built for sm_75 and up -- sm_50..sm_70 were dropped
+# because CUDA 12.8 deprecates them. The cu126 wheels still cover sm_50..sm_90.
+# Installing cu128 on an older card (a GTX 950M is sm_50, a GTX 1060 sm_61)
+# downloads ~2.5 GB that then fails every kernel launch with "no kernel image is
+# available for execution on the device" -- and torch.cuda.is_available() keeps
+# returning True, so nothing catches it until the first synthesis.
+CUDA_MODERN_MIN_CAPABILITY = (7, 5)
+CUDA_LEGACY_MIN_CAPABILITY = (5, 0)
 MANAGED_PYTHON_VERSION = "3.12.13"
 MANAGED_PYTHON_BUILD = "20260610"
-MANAGED_PYTHON_ARCHIVE_NAME = (
-    f"cpython-{MANAGED_PYTHON_VERSION}+{MANAGED_PYTHON_BUILD}"
-    "-aarch64-apple-darwin-install_only.tar.gz"
-)
-MANAGED_PYTHON_URL = (
-    "https://github.com/astral-sh/python-build-standalone/releases/download/"
-    f"{MANAGED_PYTHON_BUILD}/cpython-{MANAGED_PYTHON_VERSION}%2B{MANAGED_PYTHON_BUILD}"
-    "-aarch64-apple-darwin-install_only.tar.gz"
-)
-MANAGED_PYTHON_SHA256 = "e18ddd4c1e8f4a1d6c4590b37f423d76aec734447edc20ed08e93983d95f2132"
-MANAGED_PYTHON_DIR = RUNTIME_DIR / f"python-{MANAGED_PYTHON_VERSION}-macos-arm64"
-MANAGED_PYTHON_PATH = MANAGED_PYTHON_DIR / "python" / "bin" / "python3"
+
+
+class ManagedPython(NamedTuple):
+    """A python-build-standalone target: what to fetch and where python lands."""
+
+    triple: str
+    sha256: str
+    relative_exe: tuple[str, ...]
+    approximate_mb: int
+    label: str
+
+
+# A machine with no system Python gets a pinned, checksum-verified standalone
+# CPython instead of a dead end telling the user to go install one by hand.
+# Windows needs this at least as much as macOS: a fresh Windows box has neither
+# the py launcher nor python on PATH, and the store alias is a stub.
+MANAGED_PYTHON_TARGETS: dict[str, ManagedPython] = {
+    "macos-arm64": ManagedPython(
+        triple="aarch64-apple-darwin",
+        sha256="e18ddd4c1e8f4a1d6c4590b37f423d76aec734447edc20ed08e93983d95f2132",
+        relative_exe=("python", "bin", "python3"),
+        approximate_mb=25,
+        label="Apple Silicon",
+    ),
+    "windows-x86_64": ManagedPython(
+        triple="x86_64-pc-windows-msvc",
+        sha256="f5e4d9f856567493776f3d1e832c939fbaba5dcbcc5e0492a82ecfceea83b316",
+        relative_exe=("python", "python.exe"),
+        approximate_mb=46,
+        label="Windows",
+    ),
+}
 
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -162,6 +192,8 @@ def _run_setup(base_python: list[str] | None, target: str) -> None:
         torch_cmd = [str(venv_python), "-m", "pip", "install", "torch", "torchaudio"]
         if target == "cu128":
             torch_cmd += ["--index-url", TORCH_CUDA_INDEX]
+        elif target == "cu126":
+            torch_cmd += ["--index-url", TORCH_CUDA_LEGACY_INDEX]
         elif target == "cpu":
             torch_cmd += ["--index-url", TORCH_CPU_INDEX]
         # "mps" uses the default PyPI index.
@@ -207,11 +239,27 @@ def _run(cmd: list[str]) -> None:
 
 
 def _verify(venv_python: Path, target: str) -> None:
-    require_cuda = target == "cu128"
-    script = (
-        "import torch; "
-        f"assert {require_cuda!r} is False or torch.cuda.is_available(), 'CUDA not available after install'; "
-        "from omnivoice import OmniVoice; print('ok', torch.__version__)"
+    require_cuda = target in {"cu128", "cu126"}
+    # torch.cuda.is_available() only proves the driver loaded -- a wheel with no
+    # SASS for this card still passes it and fails at the first kernel launch.
+    # Compare the card against torch's own arch list and run one real kernel so
+    # the mismatch surfaces here, named, instead of mid-synthesis.
+    script = "\n".join(
+        [
+            "import torch",
+            f"if {require_cuda!r}:",
+            "    assert torch.cuda.is_available(), 'CUDA not available after install'",
+            "    major, minor = torch.cuda.get_device_capability()",
+            "    arches = torch.cuda.get_arch_list()",
+            "    if f'sm_{major}{minor}' not in arches:",
+            "        raise SystemExit(",
+            "            f'This PyTorch build has no kernels for sm_{major}{minor} '",
+            "            f'({torch.cuda.get_device_name(0)}); it supports ' + ', '.join(arches)",
+            "        )",
+            "    (torch.zeros(1, device='cuda') + 1).cpu()",
+            "from omnivoice import OmniVoice",
+            "print('ok', torch.__version__)",
+        ]
     )
     result = subprocess.run(
         [str(venv_python), "-c", script],
@@ -248,7 +296,7 @@ def _find_base_python() -> tuple[list[str] | None, str]:
     if system == "Darwin":
         # Apps opened from Finder do not inherit the shell PATH. Check the
         # standard python.org and Homebrew locations before command names.
-        candidates = [[str(MANAGED_PYTHON_PATH)]] + [
+        candidates = [
             [f"/Library/Frameworks/Python.framework/Versions/{version}/bin/python{version}"]
             for version in ("3.12", "3.11", "3.10")
         ]
@@ -278,6 +326,11 @@ def _find_base_python() -> tuple[list[str] | None, str]:
                 candidates.append(
                     [os.path.join(localappdata, "Programs", "Python", version, "python.exe")]
                 )
+        # python.org "install for all users" lands outside LOCALAPPDATA.
+        programfiles = os.environ.get("ProgramFiles", r"C:\Program Files")
+        for version in ("Python312", "Python311", "Python310", "Python313"):
+            candidates.append([os.path.join(programfiles, version, "python.exe")])
+            candidates.append([os.path.join("C:\\", version, "python.exe")])
         for base in (userprofile, programdata):
             if base:
                 candidates.append([os.path.join(base, "anaconda3", "python.exe")])
@@ -285,6 +338,12 @@ def _find_base_python() -> tuple[list[str] | None, str]:
         candidates.append(["python"])
     else:
         candidates = [["python3.12"], ["python3"], ["python"]]
+
+    # A managed Python downloaded by an earlier run is reused before anything
+    # else, on every platform that has one.
+    managed_key = _managed_python_key()
+    if managed_key is not None:
+        candidates.insert(0, [str(_managed_python_path(managed_key))])
     # The running interpreter is only usable when it's a real Python — never the
     # PyInstaller-frozen backend exe.
     if not getattr(sys, "frozen", False):
@@ -317,65 +376,109 @@ def _find_base_python() -> tuple[list[str] | None, str]:
     return None, f"{hint} [{' | '.join(errors)}]"
 
 
+def _managed_python_key() -> str | None:
+    """Key into MANAGED_PYTHON_TARGETS for this machine, or None if unsupported."""
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == "Darwin" and machine in {"arm64", "aarch64"}:
+        return "macos-arm64"
+    if system == "Windows" and machine in {"amd64", "x86_64"}:
+        return "windows-x86_64"
+    return None
+
+
+def _managed_python_dir(key: str) -> Path:
+    return RUNTIME_DIR / f"python-{MANAGED_PYTHON_VERSION}-{key}"
+
+
+def _managed_python_path(key: str) -> Path:
+    return _managed_python_dir(key).joinpath(*MANAGED_PYTHON_TARGETS[key].relative_exe)
+
+
+def _managed_python_archive_name(target: ManagedPython) -> str:
+    return (
+        f"cpython-{MANAGED_PYTHON_VERSION}+{MANAGED_PYTHON_BUILD}"
+        f"-{target.triple}-install_only.tar.gz"
+    )
+
+
+def _managed_python_url(target: ManagedPython) -> str:
+    return (
+        "https://github.com/astral-sh/python-build-standalone/releases/download/"
+        f"{MANAGED_PYTHON_BUILD}/cpython-{MANAGED_PYTHON_VERSION}%2B{MANAGED_PYTHON_BUILD}"
+        f"-{target.triple}-install_only.tar.gz"
+    )
+
+
 def _managed_python_supported() -> bool:
-    return platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+    return _managed_python_key() is not None
 
 
 def _ensure_managed_python() -> list[str]:
-    existing_version = _python_version([str(MANAGED_PYTHON_PATH)])
+    key = _managed_python_key()
+    if key is None:
+        raise RuntimeError("No managed Python build is available for this platform.")
+    target = MANAGED_PYTHON_TARGETS[key]
+    install_dir = _managed_python_dir(key)
+    python_path = _managed_python_path(key)
+
+    existing_version = _python_version([str(python_path)])
     if existing_version is not None and existing_version >= (3, 10):
-        return [str(MANAGED_PYTHON_PATH)]
+        return [str(python_path)]
 
     _set_state(
         "installing_python",
-        f"Downloading Python {MANAGED_PYTHON_VERSION} for Apple Silicon (about 25 MB)…",
+        f"Downloading Python {MANAGED_PYTHON_VERSION} for {target.label} "
+        f"(about {target.approximate_mb} MB)…",
     )
     downloads_dir = RUNTIME_DIR / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    archive = downloads_dir / MANAGED_PYTHON_ARCHIVE_NAME
-    if not archive.exists() or _sha256(archive) != MANAGED_PYTHON_SHA256:
+    archive = downloads_dir / _managed_python_archive_name(target)
+    if not archive.exists() or _sha256(archive) != target.sha256:
         archive.unlink(missing_ok=True)
-        _download_managed_python_archive(archive)
+        _download_managed_python_archive(archive, target)
 
     actual_hash = _sha256(archive)
-    if actual_hash != MANAGED_PYTHON_SHA256:
+    if actual_hash != target.sha256:
         archive.unlink(missing_ok=True)
         raise RuntimeError(
-            "Managed Python checksum mismatch. "
-            f"Expected {MANAGED_PYTHON_SHA256}, got {actual_hash}."
+            f"Managed Python checksum mismatch. Expected {target.sha256}, got {actual_hash}."
         )
 
-    staging = MANAGED_PYTHON_DIR.with_name(f"{MANAGED_PYTHON_DIR.name}.installing")
+    staging = install_dir.with_name(f"{install_dir.name}.installing")
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
     try:
         with tarfile.open(archive, mode="r:gz") as bundle:
             bundle.extractall(staging, filter="data")
-        staged_python = staging / "python" / "bin" / "python3"
+        staged_python = staging.joinpath(*target.relative_exe)
         if not staged_python.exists():
-            raise RuntimeError("Managed Python archive does not contain python/bin/python3.")
-        # filter="data" strips setuid/setgid but can also drop exec bits from
-        # scripts inside bin/. Re-apply exec permission to every file under
-        # bin/ so pip and other entry-points are runnable.
+            expected = "/".join(target.relative_exe)
+            raise RuntimeError(f"Managed Python archive does not contain {expected}.")
         bin_dir = staging / "python" / "bin"
-        for entry in bin_dir.iterdir():
-            if entry.is_file():
-                entry.chmod(entry.stat().st_mode | 0o111)
-        shutil.rmtree(MANAGED_PYTHON_DIR, ignore_errors=True)
-        staging.replace(MANAGED_PYTHON_DIR)
+        if bin_dir.is_dir():
+            # filter="data" strips setuid/setgid but can also drop exec bits from
+            # scripts inside bin/. Re-apply exec permission to every file under
+            # bin/ so pip and other entry-points are runnable. Windows builds put
+            # everything in python/ and Scripts/ and have no exec bit at all.
+            for entry in bin_dir.iterdir():
+                if entry.is_file():
+                    entry.chmod(entry.stat().st_mode | 0o111)
+        shutil.rmtree(install_dir, ignore_errors=True)
+        staging.replace(install_dir)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    installed_version = _python_version([str(MANAGED_PYTHON_PATH)])
+    installed_version = _python_version([str(python_path)])
     if installed_version is None or installed_version < (3, 10):
-        shutil.rmtree(MANAGED_PYTHON_DIR, ignore_errors=True)
+        shutil.rmtree(install_dir, ignore_errors=True)
         raise RuntimeError("Managed Python was extracted but could not be started.")
     _log(f"[{_now()}] Managed Python {installed_version[0]}.{installed_version[1]} ready.\n")
-    return [str(MANAGED_PYTHON_PATH)]
+    return [str(python_path)]
 
 
-def _download_managed_python_archive(destination: Path) -> None:
+def _download_managed_python_archive(destination: Path, target: ManagedPython) -> None:
     temporary = destination.with_suffix(f"{destination.suffix}.download")
     temporary.unlink(missing_ok=True)
     digest = hashlib.sha256()
@@ -384,7 +487,7 @@ def _download_managed_python_archive(destination: Path) -> None:
     try:
         with httpx.stream(
             "GET",
-            MANAGED_PYTHON_URL,
+            _managed_python_url(target),
             follow_redirects=True,
             timeout=httpx.Timeout(30.0, read=300.0),
         ) as response:
@@ -406,10 +509,10 @@ def _download_managed_python_archive(destination: Path) -> None:
                                 f"Downloading Python {MANAGED_PYTHON_VERSION}… {progress}%",
                             )
         actual_hash = digest.hexdigest()
-        if actual_hash != MANAGED_PYTHON_SHA256:
+        if actual_hash != target.sha256:
             raise RuntimeError(
                 "Managed Python download checksum mismatch. "
-                f"Expected {MANAGED_PYTHON_SHA256}, got {actual_hash}."
+                f"Expected {target.sha256}, got {actual_hash}."
             )
         temporary.replace(destination)
     except Exception:
@@ -451,11 +554,38 @@ def _select_torch_target() -> str:
     try:
         from .runtime_hardware import _detect_nvidia_gpus
 
-        if _detect_nvidia_gpus():
-            return "cu128"
+        gpus = _detect_nvidia_gpus()
     except Exception:
-        pass
+        return "cpu"
+    if not gpus:
+        return "cpu"
+
+    capabilities = [
+        capability
+        for capability in (_compute_capability(gpu) for gpu in gpus)
+        if capability is not None
+    ]
+    if not capabilities:
+        # Driver too old to report compute_cap. Keep the modern wheel rather than
+        # downgrading every card we simply could not measure; _verify catches a
+        # mismatch before the environment is marked ready.
+        return "cu128"
+    best = max(capabilities)
+    if best >= CUDA_MODERN_MIN_CAPABILITY:
+        return "cu128"
+    if best >= CUDA_LEGACY_MIN_CAPABILITY:
+        return "cu126"
     return "cpu"
+
+
+def _compute_capability(gpu: dict[str, Any]) -> tuple[int, int] | None:
+    raw = gpu.get("compute_capability")
+    if not isinstance(raw, str):
+        return None
+    major, _, minor = raw.partition(".")
+    if not major.isdigit() or not minor.isdigit():
+        return None
+    return int(major), int(minor)
 
 
 def _log_path() -> Path:
