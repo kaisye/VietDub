@@ -59,10 +59,14 @@ def render_video(
     audio_mix: dict[str, Any] | None = None,
     aspect_ratio: str = "source",
     max_lines: int = 2,
+    output_filename: str | None = None,
 ) -> Path:
     """Render a real MP4 output with the generated voice and subtitles."""
     root = ensure_storage()
-    output = root / "rendered-outputs" / f"{video_path.stem}.mp4"
+    safe_output_name = Path(output_filename).name if output_filename else f"{video_path.stem}.mp4"
+    if Path(safe_output_name).suffix.lower() != ".mp4":
+        safe_output_name = f"{Path(safe_output_name).stem}.mp4"
+    output = root / "rendered-outputs" / safe_output_name
     video_duration = _probe_duration(video_path)
     video_encoding_args, audio_bitrate = _render_quality_args(render_quality)
     configured_subtitle_style = subtitle_style

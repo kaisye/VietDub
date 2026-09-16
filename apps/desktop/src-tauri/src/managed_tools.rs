@@ -5,7 +5,6 @@ use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
-#[cfg(target_os = "macos")]
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256, Sha512};
 use tauri::{AppHandle, Manager};
@@ -58,8 +57,9 @@ fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
 
     // Avoid running npm over a complete installation. On Windows that can leave
     // files locked by a previously launched router and turn npm cleanup into an
-    // EPERM failure.
-    if router_server(&tools_dir).exists() {
+    // EPERM failure. Check files from both 9router and its embedded Next server:
+    // npm may report success while pruning files from nested bundled packages.
+    if router_installation_ready(&tools_dir) {
         return Ok(());
     }
 
@@ -93,9 +93,38 @@ fn install_managed_9router(data_dir: &Path) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    if !router_server(&tools_dir).exists() {
-        return Err("9router installed without its server entrypoint".to_string());
+
+    // The published 9router tarball contains a prebuilt Next application with
+    // its own node_modules. Installing that tarball through npm can prune files
+    // inside those nested packages (observed with next/dist/server/config.js),
+    // leaving a server that exits immediately. Restore the publisher's exact
+    // package payload after npm has installed root dependencies and run hooks.
+    restore_router_package_payload(&archive, &tools_dir)?;
+    if !router_installation_ready(&tools_dir) {
+        return Err("9router installed without a complete server payload".to_string());
     }
+    Ok(())
+}
+
+fn restore_router_package_payload(archive: &Path, tools_dir: &Path) -> Result<(), String> {
+    let staging = tools_dir.join("9router-package-staging");
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    extract_tar_gz(archive, &staging)?;
+
+    let extracted = staging.join("package");
+    if !extracted.is_dir() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err("9router archive does not contain its package directory".to_string());
+    }
+    let destination = router_package(tools_dir);
+    if destination.exists() {
+        std::fs::remove_dir_all(&destination).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&extracted, &destination).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&staging);
     Ok(())
 }
 
@@ -189,7 +218,7 @@ fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
     let tools_dir = data_dir.join("tools");
     let node = managed_node_executable(&tools_dir);
     let server = router_server(&tools_dir);
-    if !node.exists() || !server.exists() {
+    if !node.exists() || !router_installation_ready(&tools_dir) {
         return Err("9router is not installed. Run the in-app setup first.".to_string());
     }
     let server_dir = server
@@ -253,7 +282,7 @@ fn start_managed_9router(data_dir: &Path) -> Result<(), String> {
 /// in-app setup / job-recovery path handles installation) or already running.
 pub fn autostart_managed_9router(data_dir: &Path) {
     let tools_dir = data_dir.join("tools");
-    if !managed_node_executable(&tools_dir).exists() || !router_server(&tools_dir).exists() {
+    if !managed_node_executable(&tools_dir).exists() || !router_installation_ready(&tools_dir) {
         return; // not installed — nothing to start
     }
     if managed_9router_ready() {
@@ -304,11 +333,14 @@ fn managed_9router_ready() -> bool {
 }
 
 fn router_cli(tools_dir: &Path) -> PathBuf {
+    router_package(tools_dir).join("cli.js")
+}
+
+fn router_package(tools_dir: &Path) -> PathBuf {
     tools_dir
         .join("9router")
         .join("node_modules")
         .join("9router")
-        .join("cli.js")
 }
 
 fn router_server(tools_dir: &Path) -> PathBuf {
@@ -322,6 +354,17 @@ fn router_server(tools_dir: &Path) -> PathBuf {
     } else {
         app_dir.join("server.js")
     }
+}
+
+fn router_installation_ready(tools_dir: &Path) -> bool {
+    let package = router_package(tools_dir);
+    router_cli(tools_dir).is_file()
+        && package.join("app/custom-server.js").is_file()
+        && router_server(tools_dir).is_file()
+        && package.join("app/.next-cli-build/BUILD_ID").is_file()
+        && package
+            .join("app/node_modules/next/dist/server/config.js")
+            .is_file()
 }
 
 fn managed_node_executable(tools_dir: &Path) -> PathBuf {
@@ -444,7 +487,6 @@ fn extract_zip(archive: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn extract_tar_gz(archive: &Path, destination: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let decoder = GzDecoder::new(file);

@@ -172,7 +172,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
           <select value={settings.tts_provider} onChange={(e) => patch("tts_provider", e.target.value)}>
             <optgroup label={t.tts_group_edge}>
               <option value="edge">{t.tts_edge}</option>
-              <option value="nghitts">{t.tts_nghitts}</option>
+              <option value="zerotts">{t.tts_zerotts}</option>
             </optgroup>
             <optgroup label={t.tts_group_omnivoice}>
               <option value="omnivoice">{t.tts_omnivoice}</option>
@@ -183,8 +183,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
               Giọng đọc miễn phí của Microsoft — không cần GPU, luôn hoạt động. Chất lượng thấp hơn OmniVoice, không hỗ trợ clone giọng. Dùng làm dự phòng khi OmniVoice chưa sẵn sàng.
             </div>
           )}
-          {settings.tts_provider === "nghitts" && (
-            <div className="hint">{t.tts_nghitts_hint}</div>
+          {settings.tts_provider === "zerotts" && (
+            <div className="hint">{t.tts_zerotts_hint}</div>
           )}
         </div>
         <label className="check field">

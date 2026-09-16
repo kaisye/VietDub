@@ -8,6 +8,9 @@ import {
   getRuntimeSettings,
   getVoiceOptions,
   getWorkspaceSettings,
+  getZeroTtsCommunityVoices,
+  importZeroTtsVoice,
+  installZeroTtsCommunityVoice,
   getColabStatus,
   getColabAccounts,
   switchColabSavedAccount,
@@ -35,6 +38,7 @@ import type {
   RuntimeOptions,
   RuntimeSettings,
   VoiceProfile,
+  ZeroTTSCommunityVoice,
 } from "../types";
 import { useT, tt } from "../i18n";
 import { openUrl } from "../lib/open-url";
@@ -1572,8 +1576,6 @@ function VoiceList({
     void audio.play();
   }
 
-  const isBuiltIn = (v: VoiceProfile) => v.id === "none" || v.id.includes("Neural");
-
   return (
     <div className="voice-list">
       {voices.length === 0 && <p className="muted">{t.profiles_empty}</p>}
@@ -1613,9 +1615,11 @@ function VoiceList({
             <button className="btn sm" title={t.listen} onClick={() => playPreview(v.id)} disabled={v.id === "none"}>
               {playing === v.id ? t.stop_play : t.play}
             </button>
-            {!isBuiltIn(v) && (
+            {v.removable && (
               <>
-                <button className="btn sm" onClick={() => onEdit(v)}>{t.edit}</button>
+                {v.engine !== "zerotts" && (
+                  <button className="btn sm" onClick={() => onEdit(v)}>{t.edit}</button>
+                )}
                 {confirmDelete === v.id ? (
                   <>
                     <button className="btn sm danger" onClick={() => { setConfirmDelete(null); onDelete(v.id); }}>
@@ -1653,13 +1657,41 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState("");
   const [editVoice, setEditVoice] = useState<VoiceProfile | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [zeroImporting, setZeroImporting] = useState(false);
+  const [zeroImportMessage, setZeroImportMessage] = useState("");
   const [section, setSection] = useState<"engine" | "colab" | "profiles">("engine");
+  const [communityVoices, setCommunityVoices] = useState<ZeroTTSCommunityVoice[]>([]);
+  const [communityLoading, setCommunityLoading] = useState(false);
+  const [communityError, setCommunityError] = useState("");
+  const [communityInstalling, setCommunityInstalling] = useState<string | null>(null);
+  const [communityPreviewing, setCommunityPreviewing] = useState<string | null>(null);
+  const communityAudioRef = useRef<HTMLAudioElement | null>(null);
   const [colabBusy, setColabBusy] = useState(false);
   const [wslSetupMessage, setWslSetupMessage] = useState("");
   const [selectedDefaultVoice, setSelectedDefaultVoice] = useState("");
   const [setup, setSetup] = useState<OmniVoiceLocalSetup | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const setupPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadCommunityVoices = useCallback(async () => {
+    setCommunityLoading(true);
+    setCommunityError("");
+    try {
+      setCommunityVoices(await getZeroTtsCommunityVoices());
+    } catch (e) {
+      setCommunityError(e instanceof Error ? e.message : t.zerotts_community_error);
+    } finally {
+      setCommunityLoading(false);
+    }
+  }, [t.zerotts_community_error]);
+
+  useEffect(() => {
+    if (section === "profiles" && communityVoices.length === 0 && !communityLoading) {
+      void loadCommunityVoices();
+    }
+  }, [communityLoading, communityVoices.length, loadCommunityVoices, section]);
+
+  useEffect(() => () => communityAudioRef.current?.pause(), []);
 
   async function reload() {
     try {
@@ -1903,8 +1935,67 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
     try {
       await deleteVoiceOption(id);
       setVoices((prev) => prev.filter((v) => v.id !== id));
+      setCommunityVoices((prev) => prev.map((voice) => (
+        voice.installed_voice_id === id
+          ? { ...voice, installed: false, installed_voice_id: "" }
+          : voice
+      )));
     } catch (e) {
       setError(e instanceof Error ? e.message : t.profile_delete_error);
+    }
+  }
+
+  async function handleZeroTtsImport(file: File) {
+    setZeroImporting(true);
+    setZeroImportMessage("");
+    setError("");
+    try {
+      const installed = await importZeroTtsVoice(file);
+      setVoices(await getVoiceOptions());
+      setZeroImportMessage(
+        `${t.zerotts_import_success}: ${installed.map((voice) => voice.name).join(", ")}`,
+      );
+      await loadCommunityVoices();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.zerotts_import_error);
+    } finally {
+      setZeroImporting(false);
+    }
+  }
+
+  function previewCommunityVoice(voice: ZeroTTSCommunityVoice) {
+    communityAudioRef.current?.pause();
+    if (communityPreviewing === voice.id) {
+      communityAudioRef.current = null;
+      setCommunityPreviewing(null);
+      return;
+    }
+    if (!voice.preview_url) return;
+    const audio = new Audio(voice.preview_url);
+    communityAudioRef.current = audio;
+    setCommunityPreviewing(voice.id);
+    audio.onended = () => setCommunityPreviewing(null);
+    audio.onerror = () => setCommunityPreviewing(null);
+    void audio.play().catch(() => setCommunityPreviewing(null));
+  }
+
+  async function installCommunityVoice(voice: ZeroTTSCommunityVoice) {
+    setCommunityInstalling(voice.id);
+    setError("");
+    setZeroImportMessage("");
+    try {
+      const installed = await installZeroTtsCommunityVoice(voice.id);
+      setVoices(await getVoiceOptions());
+      setCommunityVoices((prev) => prev.map((item) => (
+        item.id === voice.id
+          ? { ...item, installed: true, installed_voice_id: installed.id }
+          : item
+      )));
+      setZeroImportMessage(`${t.zerotts_import_success}: ${installed.name}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.zerotts_import_error);
+    } finally {
+      setCommunityInstalling(null);
     }
   }
 
@@ -2101,11 +2192,18 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
-          <Field label={t.engine_tts_provider} hint={settings.tts_provider === "nghitts" ? t.tts_nghitts_hint : undefined}>
+          <Field
+            label={t.engine_tts_provider}
+            hint={
+              settings.tts_provider === "zerotts"
+                ? t.tts_zerotts_hint
+                : undefined
+            }
+          >
             <select value={settings.tts_provider} onChange={(e) => patch("tts_provider", e.target.value)}>
               <optgroup label={t.tts_group_edge}>
                 <option value="edge">{t.tts_edge}</option>
-                <option value="nghitts">{t.tts_nghitts}</option>
+                <option value="zerotts">{t.tts_zerotts}</option>
               </optgroup>
               <optgroup label={t.tts_group_omnivoice}>
                 <option value="omnivoice">{t.tts_omnivoice}</option>
@@ -2221,6 +2319,111 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
           <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-secondary)" }}>
             {t.profiles_sub}
           </p>
+
+          <div
+            style={{
+              marginBottom: 16,
+              padding: "12px 14px",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              background: "var(--surface-muted)",
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>{t.zerotts_library_title}</div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+              {t.zerotts_library_desc}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 10 }}>
+              <strong style={{ fontSize: 13 }}>
+                {t.zerotts_community_catalog} ({communityVoices.length})
+              </strong>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={communityLoading}
+                onClick={() => void loadCommunityVoices()}
+              >
+                {communityLoading ? t.loading : t.retry}
+              </button>
+            </div>
+            {communityError && (
+              <div className="banner err" style={{ marginTop: 8, fontSize: 12 }}>
+                {communityError}
+              </div>
+            )}
+            {communityLoading && communityVoices.length === 0 ? (
+              <div className="muted" style={{ padding: "12px 0", fontSize: 12 }}>{t.loading}</div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
+                  gap: 8,
+                  marginTop: 8,
+                }}
+              >
+                {communityVoices.map((voice) => (
+                  <div
+                    key={voice.id}
+                    style={{
+                      padding: 10,
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "var(--surface)",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{voice.name}</div>
+                    <div className="muted" style={{ minHeight: 18, fontSize: 11, marginTop: 2 }}>
+                      {[...voice.tags, voice.description].filter(Boolean).join(" · ") || "Vietnamese"}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!voice.preview_url}
+                        onClick={() => previewCommunityVoice(voice)}
+                      >
+                        {communityPreviewing === voice.id ? t.stop_play : t.listen}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm primary"
+                        disabled={voice.installed || communityInstalling === voice.id}
+                        onClick={() => void installCommunityVoice(voice)}
+                      >
+                        {communityInstalling === voice.id
+                          ? t.zerotts_installing
+                          : voice.installed
+                            ? t.zerotts_installed
+                            : t.zerotts_install}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+              <UploadButton
+                accept=".zip,application/zip"
+                label={t.zerotts_import_button}
+                hint={t.zerotts_import_hint}
+                uploading={zeroImporting}
+                onUpload={(file) => void handleZeroTtsImport(file)}
+              />
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => void openUrl("https://platform.zeroweight.ai/audio")}
+              >
+                {t.zerotts_open_library}
+              </button>
+            </div>
+            {zeroImportMessage && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--ok)" }}>
+                {zeroImportMessage}
+              </div>
+            )}
+          </div>
 
           <VoiceList
             voices={voices}

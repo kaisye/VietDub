@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -46,6 +47,7 @@ from .schemas import (
     MediaJobOut,
     MediaJobOutputOut,
     MediaJobPatch,
+    MediaJobVoiceRerenderRequest,
     ColabAccountSwitchIn,
     ColabAccountsOut,
     ColabAuthCodeIn,
@@ -81,6 +83,7 @@ from .schemas import (
     VoiceReferenceWaveformRequest,
     WorkspaceSettingsOut,
     WorkspaceSettingsPatch,
+    ZeroTTSCommunityVoiceOut,
 )
 from .services.audio_cues import (
     load_audio_cue_manifest,
@@ -154,7 +157,13 @@ from .services.voice_options import (
     VoiceOption,
     delete_voice_option,
     list_voice_options,
+    resolve_voice_option,
     save_voice_option,
+)
+from .services.zerotts_tts import (
+    fetch_zerotts_community_catalog,
+    install_zerotts_catalog_voice,
+    install_zerotts_community_archive,
 )
 from .services.workspace_settings import (
     get_workspace_settings,
@@ -167,6 +176,7 @@ from .worker import (
     confirm_speaker_mapping,
     continue_job,
     queue_job,
+    rerender_job_with_voice,
     retry_job,
 )
 
@@ -774,7 +784,8 @@ def stop_local_diarization_runtime() -> DiarizationLocalStatusOut:
 def patch_runtime_settings(payload: RuntimeSettingsPatch) -> RuntimeSettingsOut:
     settings = update_runtime_settings(payload.model_dump(exclude_unset=True))
     if (
-        settings.omnivoice_runtime != "colab"
+        settings.tts_provider == "omnivoice"
+        and settings.omnivoice_runtime != "colab"
         and os.getenv("AETHER_OMNIVOICE_AUTOSTART", "1") != "0"
     ):
         start_local_omnivoice(settings)
@@ -826,6 +837,72 @@ def create_voice_option(payload: VoiceOptionIn) -> VoiceOptionOut:
     return VoiceOptionOut.model_validate(option.__dict__)
 
 
+@app.post("/voice-options/zerotts/import", response_model=list[VoiceOptionOut])
+def import_zerotts_voice(file: UploadFile = File(...)) -> list[VoiceOptionOut]:
+    if Path(file.filename or "").suffix.lower() != ".zip":
+        raise HTTPException(
+            status_code=400,
+            detail="ZeroTTS community voices must be imported from a .zip pack.",
+        )
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            total = 0
+            while chunk := file.file.read(1024 * 1024):
+                total += len(chunk)
+                if total > 16 * 1024 * 1024:
+                    raise ValueError("ZeroTTS voice archive is larger than 16 MB.")
+                temporary.write(chunk)
+        installed = install_zerotts_community_archive(temporary_path)
+    except (OSError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if temporary_path:
+            temporary_path.unlink(missing_ok=True)
+        file.file.close()
+
+    return [
+        VoiceOptionOut.model_validate(option.__dict__)
+        for option in list_voice_options()
+        if any(option.id == voice.id for voice in installed)
+    ]
+
+
+@app.get(
+    "/voice-options/zerotts/community",
+    response_model=list[ZeroTTSCommunityVoiceOut],
+)
+def get_zerotts_community_voices() -> list[ZeroTTSCommunityVoiceOut]:
+    try:
+        voices = fetch_zerotts_community_catalog()
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to load the ZeroTTS community library: {exc}",
+        ) from exc
+    return [ZeroTTSCommunityVoiceOut.model_validate(voice) for voice in voices]
+
+
+@app.post(
+    "/voice-options/zerotts/community/{voice_id}/install",
+    response_model=VoiceOptionOut,
+)
+def install_zerotts_community_voice(voice_id: str) -> VoiceOptionOut:
+    try:
+        installed = install_zerotts_catalog_voice(voice_id)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    option = next(
+        (voice for voice in list_voice_options() if voice.id == installed.id),
+        None,
+    )
+    if not option:
+        raise HTTPException(status_code=500, detail="Installed voice was not registered.")
+    return VoiceOptionOut.model_validate(option.__dict__)
+
+
 @app.delete("/voice-options/{voice_id}")
 def remove_voice_option(voice_id: str) -> dict[str, str]:
     deleted = delete_voice_option(voice_id)
@@ -852,19 +929,10 @@ async def preview_voice_option(voice_id: str):
         return FileResponse(reference_path)
 
     sample_text = (
-        "Xin chào, đây là bản nghe thử giọng tiếng Việt trong Aether Studio."
+        "Xin chào, đây là bản nghe thử giọng tiếng Việt trong VietDub."
     )
 
-    # NGHI-TTS voices must be previewed with the NGHI-TTS engine. Prefer the bundled
-    # pre-rendered clip (instant playback, no ~60 MB model download); otherwise
-    # download the model and synthesize a sample, caching it for next time.
-    if voice and voice.engine == "nghitts":
-        from .services.nghitts_tts import bundled_preview_path
-
-        bundled = bundled_preview_path(voice.id)
-        if bundled:
-            return FileResponse(bundled, media_type="audio/mpeg")
-
+    if voice and voice.engine == "zerotts":
         preview_path = (
             ensure_storage() / "voice-previews" / f"{_safe_filename(voice.id)}.mp3"
         )
@@ -873,16 +941,16 @@ async def preview_voice_option(voice_id: str):
             try:
                 import asyncio
 
-                from .services.nghitts_tts import synthesize_nghitts
+                from .services.zerotts_tts import synthesize_zerotts
 
-                # Blocking (download + model + ffmpeg); run off the event loop.
+                # First use downloads ~900 MB of weights; keep it off the event loop.
                 await asyncio.to_thread(
-                    synthesize_nghitts, sample_text, voice.id, preview_path
+                    synthesize_zerotts, sample_text, voice.id, preview_path
                 )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Unable to generate NGHI-TTS voice preview: {exc}",
+                    detail=f"Unable to generate ZeroTTS voice preview: {exc}",
                 ) from exc
         return FileResponse(preview_path, media_type="audio/mpeg")
 
@@ -1257,6 +1325,25 @@ def retry_media_job(job_id: str, db: Session = Depends(get_db)) -> MediaJobOut:
         raise HTTPException(status_code=404, detail="Job not found.")
     _prepare_snapshotted_job_for_dispatch(job)
     job = retry_job(db, job)
+    return MediaJobOut.model_validate(job)
+
+
+@app.post("/jobs/{job_id}/rerender-voice", response_model=MediaJobOut)
+def rerender_media_job_voice(
+    job_id: str,
+    payload: MediaJobVoiceRerenderRequest,
+    db: Session = Depends(get_db),
+) -> MediaJobOut:
+    job = db.get(MediaJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    voice = resolve_voice_option(payload.voice_id)
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice not found.")
+    try:
+        job = rerender_job_with_voice(db, job, voice)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return MediaJobOut.model_validate(job)
 
 

@@ -6,8 +6,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .nghitts_tts import NGHITTS_PRESETS
 from .storage import ensure_storage
+from .zerotts_tts import (
+    ZEROTTS_PRESETS,
+    delete_zerotts_community_voice,
+    list_zerotts_community_voices,
+)
 
 NO_VOICE_ID = "none"
 BUNDLED_VOICE_DIR = Path(__file__).resolve().parents[1] / "assets" / "defaults" / "voice-library"
@@ -18,6 +22,13 @@ LEGACY_BUNDLED_VOICE_IDS = {
     "Voice03": "omnivoice_clone_04",
     "Vocie04": "omnivoice_clone_05",
     "voice05": "omnivoice_clone_06",
+    # Removed NGHI-TTS presets migrate to the closest bundled ZeroTTS voice.
+    "nghitts_ngochuyen": "zerotts_maichi",
+    "nghitts_duyoryx": "zerotts_giahuy",
+    "nghitts_manhdung": "zerotts_huuduc",
+    "nghitts_minhquang": "zerotts_quangminh",
+    "nghitts_thanhphuong": "zerotts_baotrang",
+    "nghitts_adam": "zerotts_tiendat",
 }
 
 
@@ -36,25 +47,47 @@ class VoiceOption:
     reference_text_path: str = ""
     instruction: str = ""
     # Which TTS engine speaks this voice: "" / "edge" (Microsoft neural, default),
-    # "omnivoice" (clone/design on GPU), or "nghitts" (offline CPU Piper voice).
+    # "omnivoice" (clone/design on GPU) or "zerotts" (offline CPU ONNX).
     engine: str = ""
+    removable: bool = False
 
 
-# NGHI-TTS offline preset voices (CPU, Piper/ONNX, torch-free). Built from a single
-# source of truth so the catalog and the engine never drift apart. Grouped with Edge
-# under the "Edge TTS" provider group in the UI.
-_NGHITTS_VOICE_OPTIONS: list[VoiceOption] = [
+_ZEROTTS_VOICE_OPTIONS: list[VoiceOption] = [
     VoiceOption(
         id=preset_id,
         name=display_name,
         locale="vi-VN",
         language="Vietnamese",
-        type="NGHI-TTS (offline)",
-        description="NGHI-TTS · giọng Việt offline · CPU",
-        engine="nghitts",
+        type="ZeroTTS (offline)",
+        description=f"ZeroTTS · {description} · CPU",
+        engine="zerotts",
     )
-    for preset_id, _model_name, display_name in NGHITTS_PRESETS
+    for preset_id, _upstream_id, display_name, description in ZEROTTS_PRESETS
 ]
+
+
+def _zerotts_community_options() -> list[VoiceOption]:
+    options: list[VoiceOption] = []
+    for voice in list_zerotts_community_voices():
+        vietnamese = voice.language.lower() in {"vi", "vi-vn", "vietnamese"}
+        options.append(
+            VoiceOption(
+                id=voice.id,
+                name=voice.display_name,
+                locale="vi-VN" if vietnamese else voice.language,
+                language="Vietnamese" if vietnamese else voice.language,
+                type="ZeroTTS Community",
+                description=(
+                    f"ZeroTTS Community · {voice.description}"
+                    if voice.description
+                    else "ZeroTTS Community"
+                ),
+                reference_audio_path=voice.preview_path,
+                engine="zerotts",
+                removable=True,
+            )
+        )
+    return options
 
 
 def _bundled_omnivoice_options() -> list[VoiceOption]:
@@ -97,10 +130,33 @@ def _bundled_omnivoice_options() -> list[VoiceOption]:
 
 
 DEFAULT_VOICE_OPTIONS: list[VoiceOption] = [
-    VoiceOption(NO_VOICE_ID, "None", "none", "None", "Disabled", "Keep source audio without generating a dubbed voice."),
-    VoiceOption("vi-VN-HoaiMyNeural", "Hoai My", "vi-VN", "Vietnamese", "Narration", "Vietnamese female narration voice for localized videos.", engine="edge"),
-    VoiceOption("vi-VN-NamMinhNeural", "Nam Minh", "vi-VN", "Vietnamese", "Narration", "Vietnamese male narration voice for localized videos.", engine="edge"),
-    *_NGHITTS_VOICE_OPTIONS,
+    VoiceOption(
+        NO_VOICE_ID,
+        "None",
+        "none",
+        "None",
+        "Disabled",
+        "Keep source audio without generating a dubbed voice.",
+    ),
+    VoiceOption(
+        "vi-VN-HoaiMyNeural",
+        "Hoai My",
+        "vi-VN",
+        "Vietnamese",
+        "Narration",
+        "Vietnamese female narration voice for localized videos.",
+        engine="edge",
+    ),
+    VoiceOption(
+        "vi-VN-NamMinhNeural",
+        "Nam Minh",
+        "vi-VN",
+        "Vietnamese",
+        "Narration",
+        "Vietnamese male narration voice for localized videos.",
+        engine="edge",
+    ),
+    *_ZEROTTS_VOICE_OPTIONS,
     *_bundled_omnivoice_options(),
 ]
 
@@ -108,6 +164,8 @@ DEFAULT_VOICE_OPTIONS: list[VoiceOption] = [
 def list_voice_options() -> list[VoiceOption]:
     custom = _read_custom_options()
     merged: dict[str, VoiceOption] = {voice.id: voice for voice in DEFAULT_VOICE_OPTIONS}
+    for voice in _zerotts_community_options():
+        merged[voice.id] = voice
     for voice in custom:
         if voice.id in LEGACY_BUNDLED_VOICE_IDS:
             continue
@@ -140,6 +198,7 @@ def save_voice_option(option: VoiceOption) -> VoiceOption:
         reference_text_path=option.reference_text_path.strip(),
         instruction=option.instruction.strip(),
         engine=option.engine.strip(),
+        removable=True,
     )
     if not cleaned.id:
         raise ValueError("Voice ID is required.")
@@ -155,6 +214,8 @@ def save_voice_option(option: VoiceOption) -> VoiceOption:
 
 
 def delete_voice_option(voice_id: str) -> bool:
+    if delete_zerotts_community_voice(voice_id):
+        return True
     custom = _read_custom_options()
     next_options = [voice for voice in custom if voice.id != voice_id]
     if len(next_options) == len(custom):
@@ -185,7 +246,12 @@ def _read_custom_options() -> list[VoiceOption]:
 
 def _write_custom_options(options: list[VoiceOption]) -> None:
     path = _options_path()
-    path.write_text(json.dumps([asdict(option) for option in options], indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            [asdict(option) for option in options], indent=2, ensure_ascii=False
+        ),
+        encoding="utf-8",
+    )
 
 
 def _voice_from_dict(data: dict[str, Any]) -> VoiceOption | None:
@@ -207,6 +273,7 @@ def _voice_from_dict(data: dict[str, Any]) -> VoiceOption | None:
         reference_text_path=str(data.get("reference_text_path") or "").strip(),
         instruction=str(data.get("instruction") or "").strip(),
         engine=str(data.get("engine") or "").strip(),
+        removable=True,
     )
 
 

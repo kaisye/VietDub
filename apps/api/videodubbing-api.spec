@@ -30,11 +30,10 @@ datas += [
     ("app/assets/omnivoice_service.py", "app/assets"),
     ("app/assets/omnivoice-requirements.txt", "app/assets"),
     # The user's distributable voice setup: the default OmniVoice reference clip
-    # (Voice_Ref.WAV + scripts/instruction) and the NGHI-TTS preset previews served
+    # (Voice_Ref.WAV + scripts/instruction) served
     # by /voice-options/{id}/preview. Bundled so the packaged app ships with the
-    # configured default voice and instant previews.
+    # configured default voice.
     ("app/assets/defaults", "app/assets/defaults"),
-    ("app/assets/voice-previews", "app/assets/voice-previews"),
 ]
 
 # uvicorn[standard] pulls these in only at runtime.
@@ -69,10 +68,13 @@ for pkg in (
     "onnxruntime",
     "cv2",
     "wordninja",
-    # NGHI-TTS: piper-tts ships espeakbridge.pyd + espeak-ng-data; vietnormalizer is
-    # pure-python. collect_all grabs the native lib and bundled espeak data.
-    "piper",
-    "vietnormalizer",
+    # ZeroTTS and its dynamic/native runtime dependencies. Model weights stay out
+    # of the binary and are downloaded into app storage on first use.
+    "zerotts",
+    "tokenizers",
+    "huggingface_hub",
+    "soundfile",
+    "scipy",
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)

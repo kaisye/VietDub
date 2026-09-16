@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,8 @@ from .services.production_configuration import (
     NO_SUBTITLE_STYLE_ID,
     ProductionConfiguration,
     parse_configuration_json,
+    safe_runtime_snapshot,
+    stable_json,
     validate_runtime_compatibility,
 )
 from .services.speech_rate import (
@@ -46,7 +50,7 @@ from .services.translator import (
 )
 from .services.progress import bind_job, clear_progress, report_progress
 from .services.tts import VoiceOverrides, generate_tts, tts_provider_override
-from .services.voice_options import NO_VOICE_ID
+from .services.voice_options import NO_VOICE_ID, VoiceOption
 
 
 def _default_step_detail(status: "MediaJobStatus") -> str:
@@ -192,6 +196,102 @@ def continue_job(db: Session, job: MediaJob) -> MediaJob:
     db.refresh(job)
     _start_translation_resume(job.id, raw_video_path, translated_subtitle_path)
     return job
+
+
+def rerender_job_with_voice(
+    db: Session, job: MediaJob, voice: VoiceOption
+) -> MediaJob:
+    """Reuse the downloaded video and translation, then regenerate only TTS/render."""
+    if job.status in RUNNING_STATUSES:
+        raise ValueError("The job is still running.")
+
+    checkpoint = _retry_checkpoint(job.id)
+    if checkpoint["kind"] != "translated":
+        raise ValueError(
+            "Cannot change voice because the downloaded video or translated subtitle checkpoint is missing."
+        )
+
+    _apply_voice_to_job(job, voice)
+    configuration = _job_configuration(job)
+    if configuration:
+        runtime_errors = validate_runtime_compatibility(configuration)
+        if runtime_errors:
+            raise ValueError("Runtime is incompatible: " + " ".join(runtime_errors))
+        job.runtime_snapshot_json = stable_json(safe_runtime_snapshot())
+    raw_video_path = Path(str(checkpoint["raw_video_path"]))
+    translated_subtitle_path = Path(str(checkpoint["subtitle_path"]))
+    output_filename = f"{raw_video_path.stem}-voice-{uuid.uuid4().hex[:8]}.mp4"
+
+    job.status = MediaJobStatus.tts_generating
+    job.progress = 70
+    job.current_step = "Regenerating voice audio"
+    job.error_message = None
+    job.output_url = None
+    job.started_at = datetime.utcnow()
+    job.completed_at = None
+    job.logs = append_log(
+        job.logs,
+        f"Voice changed to {voice.name} ({voice.id}); reusing download, transcript, and translation checkpoints.",
+    )
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(job)
+    _start_translation_resume(
+        job.id,
+        raw_video_path,
+        translated_subtitle_path,
+        output_filename=output_filename,
+    )
+    return job
+
+
+def _apply_voice_to_job(job: MediaJob, voice: VoiceOption) -> None:
+    provider = voice.engine if voice.engine in {"edge", "omnivoice", "zerotts"} else "auto"
+    mode = voice.omnivoice_mode if voice.omnivoice_mode in {"auto", "design", "clone"} else ""
+    snapshot = asdict(voice)
+
+    job.voice = voice.id
+    job.voice_mode = mode
+    job.voice_instruction = voice.instruction
+    job.voice_reference_audio_url = voice.reference_audio_url
+    job.voice_reference_text = voice.reference_text
+
+    speaker_map = _speaker_voice_map(job)
+    for assignment in speaker_map.values():
+        if isinstance(assignment, dict):
+            assignment["voice_id"] = voice.id
+            assignment["instruction"] = voice.instruction
+            assignment["voice_snapshot"] = snapshot
+    if speaker_map:
+        job.speaker_voice_map = stable_json(speaker_map)
+
+    if not job.configuration_snapshot_json:
+        return
+    configuration = parse_configuration_json(job.configuration_snapshot_json)
+    voice_configuration = configuration.setdefault("voice", {})
+    voice_configuration.update(
+        {
+            "voice_id": voice.id,
+            "provider": provider,
+            "mode": mode,
+            "instruction": voice.instruction,
+            "reference": {
+                "url": voice.reference_audio_url,
+                "path": voice.reference_audio_path,
+                "text": voice.reference_text,
+                "text_path": voice.reference_text_path,
+            },
+            "voice_snapshot": snapshot,
+        }
+    )
+    configured_voice_map = (configuration.get("speakers") or {}).get("voice_map") or {}
+    for assignment in configured_voice_map.values():
+        if isinstance(assignment, dict):
+            assignment["voice_id"] = voice.id
+            assignment["instruction"] = voice.instruction
+            assignment["voice_snapshot"] = snapshot
+    validated = ProductionConfiguration.model_validate(configuration)
+    job.configuration_snapshot_json = stable_json(validated.model_dump(mode="json"))
 
 
 def clone_job_as_new(db: Session, source: MediaJob) -> MediaJob:
@@ -605,6 +705,7 @@ def _continue_after_translation(
     translated_subtitle_path: Path,
     speech_rate_profile=None,
     configuration: ProductionConfiguration | None = None,
+    output_filename: str | None = None,
 ) -> None:
     voice = configuration.voice.voice_id if configuration else job.voice
     voice_enabled = voice != NO_VOICE_ID
@@ -775,6 +876,7 @@ def _continue_after_translation(
         else None,
         aspect_ratio=configuration.output.aspect_ratio if configuration else "source",
         max_lines=configuration.subtitle.max_lines if configuration else 2,
+        output_filename=output_filename,
     )
     _raise_if_cancelled(job.id)
     _log_artifact(job, output_path)
@@ -799,6 +901,7 @@ def _resume_after_translation(
     job_id: str,
     raw_video_path: Path,
     translated_subtitle_path: Path,
+    output_filename: str | None = None,
 ) -> None:
     bind_job(job_id)
     try:
@@ -813,6 +916,7 @@ def _resume_after_translation(
                 raw_video_path,
                 translated_subtitle_path,
                 configuration=configuration,
+                output_filename=output_filename,
             )
     except JobCancelled:
         with SessionLocal() as db:
@@ -830,10 +934,11 @@ def _start_translation_resume(
     job_id: str,
     raw_video_path: Path,
     translated_subtitle_path: Path,
+    output_filename: str | None = None,
 ) -> None:
     thread = threading.Thread(
         target=_resume_after_translation,
-        args=(job_id, raw_video_path, translated_subtitle_path),
+        args=(job_id, raw_video_path, translated_subtitle_path, output_filename),
         daemon=True,
     )
     thread.start()

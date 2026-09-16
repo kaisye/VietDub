@@ -51,6 +51,18 @@ export type VoiceProfile = {
   reference_text_path?: string;
   instruction?: string;
   engine?: string;
+  removable?: boolean;
+};
+
+export type ZeroTTSCommunityVoice = {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  language: string;
+  preview_url: string;
+  installed: boolean;
+  installed_voice_id: string;
 };
 
 export type WorkspaceSettings = {

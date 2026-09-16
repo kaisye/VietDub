@@ -45,3 +45,6 @@ backend-dev.log
 
 # Sinh ra luc chay boi _materialize_requirements()
 omnivoice/requirements.txt
+
+.DS_Store
+.venv-omnivoice/

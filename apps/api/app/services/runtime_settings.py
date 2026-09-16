@@ -50,10 +50,12 @@ def get_runtime_settings() -> RuntimeSettings:
         configured_runtime = "colab" if configured_url and not _is_local_url(configured_url) else "auto"
     if configured_runtime != "colab":
         configured_url = LOCAL_OMNIVOICE_URL
-    # VieNeu was removed as a TTS provider; migrate any persisted selection to Edge.
+    # Migrate selections for providers that are no longer shipped.
     tts_provider = str(data.get("tts_provider") or os.getenv("AETHER_TTS_PROVIDER", "edge")).strip().lower()
     if tts_provider == "vieneu":
         tts_provider = "edge"
+    elif tts_provider == "nghitts":
+        tts_provider = "zerotts"
     return RuntimeSettings(
         tts_provider=tts_provider,
         prefer_local_gpu=_coerce_bool(

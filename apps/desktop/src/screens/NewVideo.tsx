@@ -844,18 +844,18 @@ function VoiceDesignBuilder({
   );
 }
 
-// Engine grouping for the voice grid. Edge + NGHI-TTS share the lightweight
-// "Edge TTS" tier (CPU, no GPU); everything else (bundled OmniVoice clones and
-// custom reference voices) lives under "OmniVoice" (GPU/Colab, voice cloning).
-// Each tier gets its own accent colour so the two read apart at a glance.
-type VoiceGroupKey = "edge" | "omnivoice";
+// Engine grouping for the voice grid. ZeroTTS gets its own section because its
+// first-use download and quality/performance profile differ from the light voices.
+type VoiceGroupKey = "edge" | "zerotts" | "omnivoice";
 
 function voiceGroupKey(voice: VoiceProfile): VoiceGroupKey {
-  return voice.engine === "edge" || voice.engine === "nghitts" ? "edge" : "omnivoice";
+  if (voice.engine === "zerotts") return "zerotts";
+  return voice.engine === "edge" ? "edge" : "omnivoice";
 }
 
 const VOICE_GROUP_ACCENT: Record<VoiceGroupKey, { accent: string; soft: string; ink: string }> = {
   edge: { accent: "var(--info)", soft: "var(--info-soft)", ink: "var(--info)" },
+  zerotts: { accent: "var(--success)", soft: "var(--success-soft)", ink: "var(--success)" },
   omnivoice: { accent: "var(--primary)", soft: "var(--primary-soft)", ink: "var(--primary-ink)" },
 };
 
@@ -891,6 +891,7 @@ function VoicePicker({
 
   const noneVoice = voices.find((item) => item.id === "none");
   const edgeVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "edge");
+  const zeroVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "zerotts");
   const omniVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "omnivoice");
 
   const renderCard = (voice: VoiceProfile, group: VoiceGroupKey) => {
@@ -969,6 +970,13 @@ function VoicePicker({
         <div className="space-y-2">
           {renderGroupHeader("edge", t.voice_group_edge_title, t.voice_group_edge_note)}
           <div className={VOICE_GRID_COLS}>{edgeVoices.map((voice) => renderCard(voice, "edge"))}</div>
+        </div>
+      ) : null}
+
+      {zeroVoices.length ? (
+        <div className="space-y-2">
+          {renderGroupHeader("zerotts", t.voice_group_zerotts_title, t.voice_group_zerotts_note)}
+          <div className={VOICE_GRID_COLS}>{zeroVoices.map((voice) => renderCard(voice, "zerotts"))}</div>
         </div>
       ) : null}
 

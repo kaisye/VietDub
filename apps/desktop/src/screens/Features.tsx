@@ -164,11 +164,11 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
 
   const ttsRuntime = options.effective_tts_runtime ?? settings.tts_provider;
   const isOmniVoice = ttsRuntime === "omnivoice" || ttsRuntime.startsWith("omnivoice_");
-  const isNghitts = ttsRuntime === "nghitts";
-  // OmniVoice (GPU) and NGHI-TTS (offline CPU) are fully working states; Edge is the
+  const isZeroTTS = ttsRuntime === "zerotts";
+  // OmniVoice (GPU) and ZeroTTS (offline CPU) are fully working states; Edge is the
   // always-available fallback default, hence "warn".
-  const ttsStatus: Status = isOmniVoice || isNghitts ? "ok" : "warn";
-  const ttsBadge = isOmniVoice ? "OmniVoice" : isNghitts ? "NGHI-TTS" : "Edge TTS";
+  const ttsStatus: Status = isOmniVoice || isZeroTTS ? "ok" : "warn";
+  const ttsBadge = isOmniVoice ? "OmniVoice" : isZeroTTS ? "ZeroTTS" : "Edge TTS";
 
   const hasNvidiaKey = settings.nvidia_api_key_configured;
   // Translation is 9router-only now; NVIDIA NIM was removed as a translation backend.
@@ -234,13 +234,13 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
           ) : isVI ? (
             <>
               Máy này chưa có GPU/CUDA — <strong>không sao cả</strong>. Bạn vẫn dùng được{" "}
-              <strong>Edge</strong> (giọng đám mây) hoặc <strong>NGHI-TTS</strong> (giọng Việt offline, CPU).
+              <strong>Edge</strong> (giọng đám mây) hoặc <strong>ZeroTTS</strong> (giọng Việt local, CPU).
               GPU chỉ cần cho <strong>OmniVoice</strong> (clone / voice design).
             </>
           ) : (
             <>
               No GPU/CUDA on this machine — <strong>that's fine</strong>. You can still use{" "}
-              <strong>Edge</strong> (cloud voices) or <strong>NGHI-TTS</strong> (offline Vietnamese on CPU).
+              <strong>Edge</strong> (cloud voices) or <strong>ZeroTTS</strong> (local Vietnamese on CPU).
               A GPU is only needed for <strong>OmniVoice</strong> (clone / voice design).
             </>
           )}
@@ -317,7 +317,7 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
               >
                 <optgroup label={isVI ? "Edge TTS — chất lượng tương đối, không cần GPU" : "Edge TTS — decent quality, no GPU"}>
                   <option value="edge">Edge TTS ({isVI ? "đám mây" : "cloud"})</option>
-                  <option value="nghitts">NGHI-TTS ({isVI ? "Việt offline · CPU" : "Vietnamese offline · CPU"})</option>
+                  <option value="zerotts">ZeroTTS ({isVI ? "Việt chất lượng cao · CPU" : "high-quality Vietnamese · CPU"})</option>
                 </optgroup>
                 <optgroup label={isVI ? "OmniVoice — chất lượng cao, cho phép clone, GPU/Colab (cần setup)" : "OmniVoice — high quality, clone, GPU/Colab (needs setup)"}>
                   <option value="omnivoice">OmniVoice ({isVI ? "GPU · nâng cao" : "GPU · advanced"})</option>
@@ -342,11 +342,11 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
                   status="ok"
                 />
               </>
-            ) : isNghitts ? (
+            ) : isZeroTTS ? (
               <>
                 <Row
                   label={isVI ? "Tính năng" : "Features"}
-                  value={isVI ? "Giọng Việt offline · CPU · không cần mạng" : "Offline Vietnamese · CPU · no internet"}
+                  value={isVI ? "8 giọng tích hợp + community · CPU · không cần GPU" : "8 built-in + community voices · CPU · no GPU"}
                   status="ok"
                 />
                 <Row

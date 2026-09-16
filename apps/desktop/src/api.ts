@@ -15,6 +15,7 @@ import type {
   SubtitleStyles,
   VoiceProfile,
   WorkspaceSettings,
+  ZeroTTSCommunityVoice,
 } from "./types";
 
 // In dev mode (Vite), use a relative base URL so requests go through the
@@ -90,6 +91,37 @@ export const createVoiceOption = (profile: Partial<VoiceProfile>) =>
 
 export const deleteVoiceOption = (id: string) =>
   request<void>(`/voice-options/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export async function importZeroTtsVoice(file: File): Promise<VoiceProfile[]> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/voice-options/zerotts/import`, {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) {
+    let detail = `Import failed: ${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+export const getZeroTtsCommunityVoices = () =>
+  request<ZeroTTSCommunityVoice[]>("/voice-options/zerotts/community", {
+    cache: "no-store",
+  });
+
+export const installZeroTtsCommunityVoice = (id: string) =>
+  request<VoiceProfile>(
+    `/voice-options/zerotts/community/${encodeURIComponent(id)}/install`,
+    { method: "POST" },
+  );
 
 // --- Colab CLI runtime -------------------------------------------------------
 const COLAB_BASE = "/settings/runtime/omnivoice/colab";
@@ -214,6 +246,12 @@ export const runJob = (id: string) =>
 
 export const retryJob = (id: string) =>
   request<Job>(`/jobs/${id}/retry`, { method: "POST" });
+
+export const rerenderJobVoice = (id: string, voiceId: string) =>
+  request<Job>(`/jobs/${id}/rerender-voice`, {
+    method: "POST",
+    body: JSON.stringify({ voice_id: voiceId }),
+  });
 
 export const cancelJob = (id: string) =>
   request<Job>(`/jobs/${id}/cancel`, { method: "POST" });

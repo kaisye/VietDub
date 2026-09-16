@@ -150,6 +150,8 @@ export default function HistoryScreen({ onOpen, onEdit }: { onOpen: (jobId: stri
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
+    if (!window.confirm(t.history_delete_confirm)) return;
+
     setDeleting(id);
     try {
       await deleteJob(id);

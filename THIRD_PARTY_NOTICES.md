@@ -13,6 +13,10 @@ Notable runtime components include:
   must satisfy the corresponding GPL source and notice obligations.
 - RapidOCR/ONNX Runtime, downloaded Python dependencies governed by their own
   package licenses.
+- ZeroTTS code and model weights by ZeroWeight AI under the MIT License. Its
+  downloaded model bundle includes the MOSS Audio Tokenizer decoder under the
+  Apache License 2.0. The weights are fetched on first use and are not embedded
+  in VietDub's installer.
 - Node.js, downloaded on demand from nodejs.org under the Node.js license.
 - Python 3.12 standalone runtime, downloaded on demand from
   `astral-sh/python-build-standalone`, governed by the Python Software Foundation

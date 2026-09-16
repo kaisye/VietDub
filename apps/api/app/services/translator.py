@@ -1052,9 +1052,35 @@ def _request_translation_completion(model: str, system_prompt: str, user_prompt:
             f"9router không tìm thấy model dịch '{model}'. Mở dashboard 9router "
             f"(127.0.0.1:20128) để định tuyến/chọn model rồi bấm Thử lại."
         )
+    if response.status_code in (400, 406, 422):
+        detail = _router_error_detail(response)
+        raise RuntimeError(
+            f"9router từ chối model dịch '{model}' (HTTP {response.status_code}). "
+            f"Chi tiết: {detail}. Mở dashboard 9router (127.0.0.1:20128) để "
+            "chọn model tương thích rồi bấm Thử lại."
+        )
 
     response.raise_for_status()
     return _extract_chat_completion_content(response.json())
+
+
+def _router_error_detail(response: httpx.Response) -> str:
+    """Return the useful upstream error without exposing a full response body."""
+    detail: object = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                detail = error.get("message") or error.get("detail") or ""
+            elif error:
+                detail = error
+            detail = detail or payload.get("detail") or payload.get("message") or ""
+    except (ValueError, TypeError):
+        detail = response.text
+
+    normalized = " ".join(str(detail).split())
+    return normalized[:600] or response.reason_phrase or "Yêu cầu không hợp lệ"
 
 
 def _request_openai_compatible_translation(model: str, system_prompt: str, user_prompt: str) -> httpx.Response:

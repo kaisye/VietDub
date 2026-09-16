@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from .runtime_settings import get_runtime_settings
 from .renderer import normalize_subtitle_style
 from .subtitle_styles import list_subtitle_styles
-from .voice_options import NO_VOICE_ID, VoiceOption, list_voice_options
+from .voice_options import NO_VOICE_ID, VoiceOption, canonical_voice_id, list_voice_options
 from .workspace_settings import get_workspace_settings
 
 
@@ -63,7 +63,7 @@ class VoiceReferenceSnapshot(ConfigurationModel):
 
 class VoiceConfiguration(ConfigurationModel):
     voice_id: str = Field(default="vi-VN-HoaiMyNeural", min_length=1, max_length=160)
-    provider: Literal["auto", "edge", "omnivoice"] = "auto"
+    provider: Literal["auto", "edge", "omnivoice", "zerotts"] = "auto"
     mode: Literal["", "auto", "design", "clone"] = ""
     rate: int = Field(default=0, ge=-100, le=100)
     instruction: str = Field(default="", max_length=4000)
@@ -202,6 +202,17 @@ def migrate_configuration_document(configuration: dict[str, Any]) -> dict[str, A
     version = migrated.get("schema_version", CONFIGURATION_SCHEMA_VERSION)
     if version != CONFIGURATION_SCHEMA_VERSION:
         raise ValueError(f"Unsupported configuration schema version: {version}.")
+    voice = migrated.get("voice")
+    if isinstance(voice, dict) and voice.get("voice_id"):
+        voice["voice_id"] = canonical_voice_id(str(voice["voice_id"]))
+        if voice.get("provider") == "nghitts":
+            voice["provider"] = "zerotts"
+    speakers = migrated.get("speakers")
+    voice_map = speakers.get("voice_map") if isinstance(speakers, dict) else None
+    if isinstance(voice_map, dict):
+        for assignment in voice_map.values():
+            if isinstance(assignment, dict) and assignment.get("voice_id"):
+                assignment["voice_id"] = canonical_voice_id(str(assignment["voice_id"]))
     return migrated
 
 
@@ -409,13 +420,7 @@ def _snapshot_voice(configuration: dict[str, Any]) -> None:
         or voice.reference_text
         or voice.reference_text_path
     )
-    voice_data["provider"] = (
-        "omnivoice"
-        if uses_omnivoice
-        else "edge"
-        if voice.id.endswith("Neural")
-        else "auto"
-    )
+    voice_data["provider"] = "omnivoice" if uses_omnivoice else (voice.engine or "auto")
     voice_data["mode"] = (
         voice.omnivoice_mode or "clone"
         if uses_omnivoice

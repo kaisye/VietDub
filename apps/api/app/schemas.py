@@ -156,6 +156,10 @@ class MediaJobPatch(BaseModel):
     status: MediaJobStatus | None = None
 
 
+class MediaJobVoiceRerenderRequest(BaseModel):
+    voice_id: str = Field(min_length=1, max_length=160)
+
+
 class MediaJobOut(BaseModel):
     id: str
     video_id: str | None = None
@@ -925,6 +929,18 @@ class VoiceOptionOut(BaseModel):
     reference_text_path: str = ""
     instruction: str = ""
     engine: str = ""
+    removable: bool = False
+
+
+class ZeroTTSCommunityVoiceOut(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    language: str = "vi"
+    preview_url: str = ""
+    installed: bool = False
+    installed_voice_id: str = ""
 
 
 class VoiceReferenceUploadOut(BaseModel):

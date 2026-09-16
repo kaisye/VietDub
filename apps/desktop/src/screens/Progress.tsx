@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getVoiceOptions, outputUrl, retryJob, revealJob } from "../api";
+import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getVoiceOptions, outputUrl, rerenderJobVoice, retryJob, revealJob, voicePreviewUrl } from "../api";
 import type { Job, RuntimeOptions, RuntimeSettings, VoiceProfile } from "../types";
 import { useT } from "../i18n";
 import { openUrl } from "../lib/open-url";
@@ -126,10 +126,10 @@ function engineLabel(
     }
     case "tts_generating": {
       if (job.voice === "none") return isVI ? "Tắt giọng" : "No voice";
-      // NGHI-TTS voices are routed by the voice itself (offline CPU engine),
-      // independent of the global runtime — detect them first.
+      // Local preset voices are routed by the voice itself, independent of the
+      // global runtime, so detect them first.
       const profile = voiceProfiles.find((p) => p.id === job.voice);
-      if (profile?.engine === "nghitts") return "NGHI-TTS · CPU";
+      if (profile?.engine === "zerotts") return "ZeroTTS · CPU";
       const rt = options?.effective_tts_runtime;
       // Clone/design voices are auto-promoted to OmniVoice by the backend even when
       // the global tts_provider is "edge". Detect this case so the label stays honest.
@@ -137,10 +137,10 @@ function engineLabel(
       if (rt === "omnivoice_local") return "OmniVoice GPU";
       if (rt === "omnivoice_colab") return "OmniVoice Colab";
       if (cloneVoice) return "OmniVoice";
-      if (rt === "nghitts") return "NGHI-TTS · CPU";
+      if (rt === "zerotts") return "ZeroTTS · CPU";
       if (rt === "edge") return "Edge TTS";
-      return settings?.tts_provider === "nghitts"
-        ? "NGHI-TTS · CPU"
+      return settings?.tts_provider === "zerotts"
+        ? "ZeroTTS · CPU"
         : settings?.tts_provider === "omnivoice"
         ? "OmniVoice"
         : "Edge TTS";
@@ -468,6 +468,11 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
   const [settings, setSettings] = useState<RuntimeSettings | null>(null);
   const [options, setOptions] = useState<RuntimeOptions | null>(null);
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
+  const [showVoiceEditor, setShowVoiceEditor] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState("");
+  const [rerenderingVoice, setRerenderingVoice] = useState(false);
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const voicePreviewRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     getRuntimeSettings().then(setSettings).catch(() => undefined);
@@ -476,7 +481,12 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
 
   useEffect(() => {
     getVoiceOptions().then(setVoiceProfiles).catch(() => undefined);
+    return () => voicePreviewRef.current?.pause();
   }, []);
+
+  useEffect(() => {
+    if (job && !showVoiceEditor) setSelectedVoice(job.voice);
+  }, [job?.voice, showVoiceEditor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,6 +598,49 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
       setError(e instanceof Error ? e.message : vi ? "Không thể mở thư mục." : "Could not open folder.");
     } finally {
       setRevealing(false);
+    }
+  }
+
+  function previewVoice(voiceId: string) {
+    if (!voiceId || voiceId === "none") return;
+    if (previewingVoiceId === voiceId) {
+      voicePreviewRef.current?.pause();
+      voicePreviewRef.current = null;
+      setPreviewingVoiceId(null);
+      return;
+    }
+    voicePreviewRef.current?.pause();
+    const audio = new Audio(voicePreviewUrl(voiceId));
+    voicePreviewRef.current = audio;
+    setPreviewingVoiceId(voiceId);
+    audio.onended = () => setPreviewingVoiceId(null);
+    audio.onerror = () => setPreviewingVoiceId(null);
+    void audio.play().catch(() => setPreviewingVoiceId(null));
+  }
+
+  function selectPreviewVoice(voiceId: string) {
+    voicePreviewRef.current?.pause();
+    voicePreviewRef.current = null;
+    setPreviewingVoiceId(null);
+    setSelectedVoice(voiceId);
+  }
+
+  async function changeVoiceAndRerender() {
+    if (!selectedVoice || rerenderingVoice) return;
+    setRerenderingVoice(true);
+    setError("");
+    voicePreviewRef.current?.pause();
+    setPreviewingVoiceId(null);
+    try {
+      const updated = await rerenderJobVoice(jobId, selectedVoice);
+      prevJobRef.current = updated;
+      setJob(updated);
+      setShowVoiceEditor(false);
+      setPollKey((key) => key + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.progress_voice_rerender_error);
+    } finally {
+      setRerenderingVoice(false);
     }
   }
 
@@ -789,7 +842,116 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
                 ? (isVI ? "Đang mở…" : "Opening…")
                 : t.progress_open}
             </button>
+            <button
+              className="btn"
+              onClick={() => setShowVoiceEditor((value) => !value)}
+            >
+              {t.progress_change_voice}
+            </button>
           </div>
+          {showVoiceEditor ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 14,
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                background: "var(--surface-muted)",
+              }}
+            >
+              <strong style={{ display: "block", marginBottom: 4 }}>
+                {t.progress_change_voice_title}
+              </strong>
+              <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>
+                {t.progress_change_voice_desc}
+              </p>
+              <div
+                role="listbox"
+                aria-label={t.progress_change_voice_title}
+                style={{
+                  maxHeight: 320,
+                  overflowY: "auto",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  background: "var(--surface)",
+                  marginBottom: 12,
+                }}
+              >
+                {voiceProfiles.map((voice, index) => {
+                  const selected = voice.id === selectedVoice;
+                  const playing = voice.id === previewingVoiceId;
+                  return (
+                    <div
+                      key={voice.id}
+                      role="option"
+                      aria-selected={selected}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "7px 8px 7px 12px",
+                        background: selected ? "var(--primary-soft)" : "transparent",
+                        borderBottom: index < voiceProfiles.length - 1 ? "1px solid var(--border-subtle)" : "none",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => selectPreviewVoice(voice.id)}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          padding: "3px 0",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <span style={{ fontWeight: selected ? 700 : 500 }}>
+                          {selected ? "✓ " : ""}{voice.name}
+                        </span>
+                        <span className="muted"> · {voice.type}</span>
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={voice.id === "none"}
+                        onClick={() => previewVoice(voice.id)}
+                        aria-label={`${playing ? t.progress_voice_stop : t.listen}: ${voice.name}`}
+                        title={playing ? t.progress_voice_stop : t.listen}
+                        style={{
+                          width: 34,
+                          height: 34,
+                          padding: 0,
+                          borderRadius: "50%",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                          fontSize: playing ? 12 : 15,
+                          lineHeight: 1,
+                        }}
+                      >
+                        <span aria-hidden="true" style={{ marginLeft: playing ? 0 : 2 }}>
+                          {playing ? "■" : "▶"}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="btn primary"
+                  disabled={!selectedVoice || rerenderingVoice}
+                  onClick={() => void changeVoiceAndRerender()}
+                >
+                  {rerenderingVoice ? t.progress_voice_rerendering : t.progress_voice_rerender}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

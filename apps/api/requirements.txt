@@ -8,14 +8,9 @@ cryptography>=45.0.0
 python-dotenv>=1.1.0
 yt-dlp>=2025.12.8
 edge-tts>=7.2.3
-# Offline Vietnamese TTS (CPU, Piper/ONNX, torch-free) — NGHI-TTS preset voices.
-# The cp39-abi3 wheel bundles the espeak-ng phonemizer + data, so no separate
-# piper-phonemize/espeak-ng install is needed. Models are downloaded on demand
-# from nghitts.app and cached. Pulls in onnxruntime (already used by OCR).
-piper-tts>=1.4.0,<2
-# Vietnamese text normalization for TTS (numbers/dates/units/acronyms → spoken
-# form). Pure standard library, no native deps.
-vietnormalizer>=0.2.3,<0.3
+# High-quality Vietnamese TTS on CPU via ONNX. Weights (~900 MB) and the eight
+# official voice packs are downloaded from Hugging Face on first use.
+zerotts>=0.1.5,<0.2
 # Hard-subtitle OCR (CPU): runs the PP-OCR detection/recognition models via
 # ONNXRuntime with models bundled in the wheel — no paddlepaddle, no runtime
 # download. Imported lazily, only when the "ocr" subtitle source is selected.

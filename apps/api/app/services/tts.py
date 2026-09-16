@@ -23,7 +23,7 @@ from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_duration_scale
 from .storage import ensure_storage
 from .subtitle import subtitle_to_plain_text
-from .nghitts_tts import NGHITTS_PRESETS, is_nghitts_voice, synthesize_nghitts
+from .zerotts_tts import ZEROTTS_PRESETS, is_zerotts_voice, synthesize_zerotts
 from .tts_runtime import RUNTIME_EDGE, resolve_effective_tts_runtime
 from .voice_options import canonical_voice_id, list_voice_options
 
@@ -121,7 +121,7 @@ def _safe_tts_artifact_stem(path: Path) -> str:
 @contextmanager
 def tts_provider_override(provider: str | None):
     normalized = (provider or "").strip().lower()
-    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"edge", "omnivoice", "nghitts"} else "")
+    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"edge", "omnivoice", "zerotts"} else "")
     try:
         yield
     finally:
@@ -140,60 +140,33 @@ def generate_tts(
 ) -> Path:
     """Generate spoken audio from subtitle text and place each segment on the subtitle timeline."""
     root = ensure_storage()
-    # Route NGHI-TTS preset voices to the offline NGHI-TTS engine regardless of the
-    # configured/overridden provider — a NGHI-TTS voice can only be spoken by NGHI-TTS,
-    # so the engine is implied by the selected voice (Edge and NGHI-TTS coexist in the
-    # same catalog under the "Edge TTS" group).
-    if is_nghitts_voice(voice) and _tts_provider() != "nghitts":
-        logger.info("Voice '%s' is a NGHI-TTS preset; routing to the NGHI-TTS engine.", voice)
-        with tts_provider_override("nghitts"):
+    if is_zerotts_voice(voice) and _tts_provider() != "zerotts":
+        logger.info("Voice '%s' is a ZeroTTS preset; routing to the ZeroTTS engine.", voice)
+        with tts_provider_override("zerotts"):
             return generate_tts(
-                text_or_subtitle,
-                voice,
-                target_language,
-                voice_rate,
-                speech_rate,
-                voice_overrides,
-                speaker_voice_map,
-                diarization_job_id,
+                text_or_subtitle, voice, target_language, voice_rate, speech_rate,
+                voice_overrides, speaker_voice_map, diarization_job_id,
             )
-    # The provider is explicitly NGHI-TTS but the chosen voice isn't one of its presets
-    # (e.g. a generic/default or Edge voice left selected). NGHI-TTS can only speak its
-    # built-in Vietnamese voices, so substitute the default preset for Vietnamese
-    # targets and fall back to the always-available Edge voice for any other language —
-    # never hand a non-preset id to the engine.
-    if _tts_provider() == "nghitts" and not is_nghitts_voice(voice):
-        if str(target_language or "").lower().startswith("vi") and NGHITTS_PRESETS:
-            default_voice = NGHITTS_PRESETS[0][0]
+    if _tts_provider() == "zerotts" and not is_zerotts_voice(voice):
+        if str(target_language or "").lower().startswith("vi") and ZEROTTS_PRESETS:
+            default_voice = ZEROTTS_PRESETS[0][0]
             logger.info(
-                "NGHI-TTS provider with non-preset voice '%s'; using default preset '%s'.",
+                "ZeroTTS provider with non-preset voice '%s'; using default preset '%s'.",
                 voice,
                 default_voice,
             )
             return generate_tts(
-                text_or_subtitle,
-                default_voice,
-                target_language,
-                voice_rate,
-                speech_rate,
-                voice_overrides,
-                speaker_voice_map,
-                diarization_job_id,
+                text_or_subtitle, default_voice, target_language, voice_rate, speech_rate,
+                voice_overrides, speaker_voice_map, diarization_job_id,
             )
         logger.warning(
-            "NGHI-TTS only speaks Vietnamese; falling back to Edge for language '%s'.",
+            "ZeroTTS only speaks Vietnamese; falling back to Edge for language '%s'.",
             target_language,
         )
         with tts_provider_override("edge"):
             return generate_tts(
-                text_or_subtitle,
-                voice,
-                target_language,
-                voice_rate,
-                speech_rate,
-                voice_overrides,
-                speaker_voice_map,
-                diarization_job_id,
+                text_or_subtitle, voice, target_language, voice_rate, speech_rate,
+                voice_overrides, speaker_voice_map, diarization_job_id,
             )
     # Auto-promote to OmniVoice when the selected voice is a clone/design voice.
     # Edge TTS has no concept of reference audio or voice cloning — forwarding a
@@ -293,8 +266,8 @@ def generate_tts(
 
     output = root / "audio" / f"{_safe_tts_artifact_stem(text_or_subtitle)}.mp3"
     try:
-        if _tts_provider() == "nghitts":
-            synthesize_nghitts(text, selected_voice, output)
+        if _tts_provider() == "zerotts":
+            _save_provider_tts(text, selected_voice, output, selected_rate)
         else:
             asyncio.run(_save_edge_tts(text, selected_voice, output, selected_rate))
     except Exception as exc:
@@ -440,10 +413,11 @@ def _generate_chunked_tts(
         else _semantic_sentence_cues(_ordered_cues(cues))
     )
 
-    if _tts_provider() == "nghitts":
-        return _generate_nghitts_timeline_tts(
+    if _tts_provider() == "zerotts":
+        return _generate_local_timeline_tts(
             semantic_cues,
             voice,
+            rate,
             workdir,
             output,
             speech_rate,
@@ -493,9 +467,10 @@ def _generate_chunked_tts(
     return output
 
 
-def _generate_nghitts_timeline_tts(
+def _generate_local_timeline_tts(
     semantic_cues: list[SubtitleCue],
     voice: str,
+    rate: str,
     workdir: Path,
     output: Path,
     speech_rate: SpeechRateProfile | None,
@@ -503,11 +478,11 @@ def _generate_nghitts_timeline_tts(
     *,
     preserve_cue_boundaries: bool = False,
 ) -> Path:
-    """Synthesize NGHI-TTS units (CPU, sequential) and fit each to the SRT timeline.
+    """Synthesize local CPU TTS units sequentially and fit each to the SRT timeline.
 
-    Mirrors the Edge timeline path so NGHI-TTS dubs stay in sync: each unit is voiced,
+    Mirrors the Edge timeline path so local dubs stay in sync: each unit is voiced,
     then time-compressed only if it would overrun the next cue, and overlaid on the
-    original timestamps. NGHI-TTS runs locally on CPU (Piper ONNX), so units are
+    original timestamps. Local models share one in-process runtime, so units are
     produced one at a time rather than via the async fan-out used for Edge.
     """
     units = (
@@ -516,24 +491,26 @@ def _generate_nghitts_timeline_tts(
         else _edge_timeline_units(semantic_cues)
     )
     if not units:
-        raise RuntimeError("No subtitle cues available for NGHI-TTS timeline TTS.")
+        raise RuntimeError("No subtitle cues available for local timeline TTS.")
+
+    provider = _tts_provider()
 
     min_gap = _env_float("AETHER_EDGE_MIN_GAP_SECONDS", 0.08, minimum=0.0, maximum=2.0)
     timed_segments: list[TimedAudioSegment] = []
     manifest_chunks: list[TtsChunk] = []
 
     for index, unit in enumerate(units):
-        raw_segment = workdir / f"{index + 1:04d}_nghitts_raw.wav"
+        raw_segment = workdir / f"{index + 1:04d}_{provider}_raw.wav"
         cleaned = _sanitize_tts_text(unit.text)
         target_duration = max(0.25, unit.end - unit.start)
         if not _has_speakable_content(cleaned):
             _create_silence(raw_segment, target_duration)
         else:
             try:
-                synthesize_nghitts(cleaned, voice, raw_segment)
+                _save_provider_tts(cleaned, voice, raw_segment, rate)
             except Exception as exc:
                 raise RuntimeError(
-                    f"NGHI-TTS synthesis failed for voice '{voice}' on cue {index + 1}: {exc}"
+                    f"{provider} synthesis failed for voice '{voice}' on cue {index + 1}: {exc}"
                 ) from exc
 
         next_start = units[index + 1].start if index + 1 < len(units) else float("inf")
@@ -545,11 +522,11 @@ def _generate_nghitts_timeline_tts(
 
         fitted_path, fitted_duration = _fit_edge_audio_to_slot(
             raw_segment,
-            workdir / f"{index + 1:04d}_nghitts_fit.mp3",
+            workdir / f"{index + 1:04d}_{provider}_fit.mp3",
             max_duration,
         )
         end = unit.start + fitted_duration
-        _flag_cue_overrun(workdir, f"{index + 1:04d}_nghitts", unit, fitted_duration, next_start)
+        _flag_cue_overrun(workdir, f"{index + 1:04d}_{provider}", unit, fitted_duration, next_start)
         timed_segments.append(TimedAudioSegment(path=fitted_path, start=unit.start, end=end))
         manifest_chunks.append(TtsChunk(start=unit.start, end=end, cues=[unit]))
 
@@ -558,7 +535,7 @@ def _generate_nghitts_timeline_tts(
     _write_chunk_manifest(output, manifest_chunks, timed_segments, speech_rate)
 
     if not output.exists() or output.stat().st_size == 0:
-        raise RuntimeError("NGHI-TTS returned an empty timeline audio file.")
+        raise RuntimeError(f"{provider} returned an empty timeline audio file.")
     return output
 
 
@@ -2004,8 +1981,8 @@ def _save_provider_tts(
     voice_overrides: VoiceOverrides | None = None,
 ) -> None:
     provider = _tts_provider()
-    if provider == "nghitts":
-        synthesize_nghitts(text, voice, output)
+    if provider == "zerotts":
+        synthesize_zerotts(text, voice, output, rate)
         return
     if provider == "omnivoice":
         try:
@@ -2576,7 +2553,7 @@ def _resolve_voice(voice: str, target_language: str) -> str:
         # Edge TTS only accepts Microsoft Neural voice IDs (e.g. "vi-VN-HoaiMyNeural").
         # OmniVoice-specific IDs (e.g. "CDTeam") must not be forwarded to Edge TTS.
         is_neural_id = normalized.endswith("Neural") and "-" in normalized
-        if is_neural_id or _tts_provider() in {"omnivoice", "nghitts"}:
+        if is_neural_id or _tts_provider() in {"omnivoice", "zerotts"}:
             return normalized
         # Provider is Edge — map via the voice option's locale to the nearest neural voice.
         locale_key = (option.locale or "").split("-")[0].lower()
@@ -2590,7 +2567,7 @@ def _resolve_voice(voice: str, target_language: str) -> str:
     )
     if matched_option:
         is_neural_id = matched_option.id.endswith("Neural") and "-" in matched_option.id
-        if is_neural_id or _tts_provider() in {"omnivoice", "nghitts"}:
+        if is_neural_id or _tts_provider() in {"omnivoice", "zerotts"}:
             return matched_option.id
         locale_key = (matched_option.locale or "").split("-")[0].lower()
         lang_key = locale_key or (target_language or "en").split("-")[0].lower()
