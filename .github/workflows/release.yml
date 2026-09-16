@@ -160,8 +160,46 @@ jobs:
         shell: bash
         run: |
           APP_PATH="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/VietDub.app"
+          SIDECAR_PATH="$APP_PATH/Contents/MacOS/videodubbing-api"
           test -d "$APP_PATH"
           codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+
+          # A valid outer bundle signature is not enough for a PyInstaller
+          # one-file sidecar. Hardened Runtime library validation rejects the
+          # extracted Python.framework unless this entitlement reaches the
+          # sidecar itself.
+          codesign -d --entitlements :- "$SIDECAR_PATH" 2>&1 \
+            | grep -q 'com.apple.security.cs.disable-library-validation'
+
+          SMOKE_DIR="$(mktemp -d)"
+          SMOKE_PORT=19386
+          AETHER_API_PORT="$SMOKE_PORT" \
+          AETHER_DATA_DIR="$SMOKE_DIR/data" \
+          AETHER_RUNTIME_DIR="$SMOKE_DIR/runtime" \
+            "$SIDECAR_PATH" >"$SMOKE_DIR/backend.log" 2>&1 &
+          SIDECAR_PID=$!
+          cleanup() {
+            kill "$SIDECAR_PID" 2>/dev/null || true
+            wait "$SIDECAR_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent "http://127.0.0.1:$SMOKE_PORT/health" >/dev/null; then
+              echo "Packaged macOS backend smoke test passed."
+              exit 0
+            fi
+            if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+              echo "::error::Packaged macOS backend exited before becoming ready."
+              cat "$SMOKE_DIR/backend.log"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "::error::Packaged macOS backend did not become ready within 90 seconds."
+          cat "$SMOKE_DIR/backend.log"
+          exit 1
 
       # Optional backend delta-update track (managed_backend.rs). Publishing a
       # backend-manifest.json + the raw frozen backend lets the app pull a
