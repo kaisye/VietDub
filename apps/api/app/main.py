@@ -63,6 +63,9 @@ from .schemas import (
     SpeakerOut,
     SpeakerReviewOut,
     SpeakerTurnOut,
+    StorageCleanupOut,
+    StorageCleanupRequest,
+    StorageUsageOut,
     SourceVideoPreviewRequest,
     SourceVideoUploadOut,
     SubtitleStyleActivePatch,
@@ -122,6 +125,12 @@ from .services.subtitle_styles import (
     list_subtitle_styles,
     save_subtitle_style,
     set_active_subtitle_style,
+)
+from .services.storage import (
+    cleanup_temporary_artifacts,
+    clear_zerotts_cache,
+    remove_job_artifacts,
+    storage_usage,
 )
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
@@ -451,6 +460,51 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/storage-management/usage", response_model=StorageUsageOut)
+def get_storage_usage() -> StorageUsageOut:
+    return StorageUsageOut(**storage_usage())
+
+
+@app.post("/storage-management/cleanup", response_model=StorageCleanupOut)
+def cleanup_storage(payload: StorageCleanupRequest, db: Session = Depends(get_db)) -> StorageCleanupOut:
+    active_statuses = (
+        MediaJobStatus.queued,
+        MediaJobStatus.downloading,
+        MediaJobStatus.transcribing,
+        MediaJobStatus.translating,
+        MediaJobStatus.speaker_review,
+        MediaJobStatus.tts_generating,
+        MediaJobStatus.audio_review,
+        MediaJobStatus.rendering,
+    )
+    if payload.target == "temporary":
+        active_ids = db.query(MediaJob.id).filter(MediaJob.status.in_(active_statuses)).all()
+        removed = cleanup_temporary_artifacts(item[0] for item in active_ids)
+    else:
+        removed = clear_zerotts_cache()
+    return StorageCleanupOut(removed_bytes=removed, usage=StorageUsageOut(**storage_usage()))
+
+
+@app.post("/storage-management/reveal")
+def reveal_storage_folder() -> dict[str, str]:
+    """Open VietDub's active storage directory in Explorer/Finder."""
+    import platform
+    import subprocess
+
+    folder = ensure_storage().resolve()
+    system = platform.system()
+    try:
+        if system == "Windows":
+            os.startfile(folder)  # type: ignore[attr-defined]
+        elif system == "Darwin":
+            subprocess.Popen(["open", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not open storage folder: {exc}") from exc
+    return {"status": "ok", "folder": str(folder)}
 
 
 @app.get("/debug/status")
@@ -1421,13 +1475,20 @@ def delete_media_job(job_id: str, db: Session = Depends(get_db)) -> dict[str, st
     job = db.get(MediaJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status in {
+        MediaJobStatus.queued, MediaJobStatus.downloading, MediaJobStatus.transcribing,
+        MediaJobStatus.translating, MediaJobStatus.speaker_review,
+        MediaJobStatus.tts_generating, MediaJobStatus.audio_review, MediaJobStatus.rendering,
+    }:
+        raise HTTPException(status_code=409, detail="Cannot delete data for a job that is still running.")
+    removed_bytes = remove_job_artifacts(job_id)
     db.delete(job)
     db.add(
         AuditLog(
             entity_type="media_job",
             entity_id=job_id,
             action="deleted",
-            message="Job row deleted.",
+            message=f"Job and {removed_bytes} bytes of generated data deleted.",
         )
     )
     db.commit()

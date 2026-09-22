@@ -11,9 +11,11 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -48,6 +50,14 @@ _MAX_VOICE_ARCHIVE_BYTES = 16 * 1024 * 1024
 _MAX_VOICE_PACK_BYTES = 16 * 1024 * 1024
 _COMMUNITY_API_URL = (
     "https://api-prod.zeroweight.ai/api/v1/audio/voices/public?type=community"
+)
+# Keep VietDub's recommended ZeroTTS voices at the top of the public catalogue.
+# IDs are used instead of display names because the upstream catalogue can
+# contain multiple voices with the same name (it currently has two Ngọc Huyền
+# entries).
+ZEROTTS_FEATURED_COMMUNITY_VOICE_IDS: tuple[str, ...] = (
+    "7owuK1LaOPOaQjeSzmQ4",  # Ngọc Huyền — kể truyện, review phim
+    "MAJfDVfQqPF5Fr4DvibN",  # Thức Dậy Đi
 )
 
 _MODEL = None
@@ -279,6 +289,11 @@ def fetch_zerotts_community_catalog() -> list[dict]:
                 "installed_voice_id": installed.get(voice_id, ""),
             }
         )
+    featured_order = {
+        voice_id: index
+        for index, voice_id in enumerate(ZEROTTS_FEATURED_COMMUNITY_VOICE_IDS)
+    }
+    catalog.sort(key=lambda voice: featured_order.get(voice["id"], len(featured_order)))
     return catalog
 
 
@@ -396,6 +411,15 @@ def _thread_count() -> int:
             return max(1, min(32, int(configured)))
         except ValueError:
             logger.warning("Ignoring invalid AETHER_ZEROTTS_THREADS=%r", configured)
+    # ZeroTTS's small per-frame ONNX graphs spend more time coordinating ORT
+    # workers than doing useful work when all 8 M1 cores are enabled. On an
+    # M1 Air, 2 threads measured ~2.4 s for 4.4 s audio versus ~6 s at 8.
+    if (
+        sys.platform == "darwin"
+        and platform.machine() == "arm64"
+        and (os.cpu_count() or 0) <= 8
+    ):
+        return 2
     return max(1, min(8, os.cpu_count() or 4))
 
 

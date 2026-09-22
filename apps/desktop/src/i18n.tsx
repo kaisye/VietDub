@@ -10,7 +10,7 @@ const vi = {
   nav_history: "Lịch sử",
   nav_voices: "Giọng đọc",
   nav_features: "Tính năng",
-  nav_config: "Cấu hình",
+  nav_config: "Cặt đặt",
   footer_rights: "Bảo lưu mọi quyền.",
   footer_contact: "Liên hệ",
   connecting: "Đang kết nối backend…",

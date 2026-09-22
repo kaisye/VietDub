@@ -37,6 +37,14 @@ export type RuntimeOptions = {
   torch: { installed: boolean; cuda_available: boolean; warning?: string };
 };
 
+export type StorageUsage = {
+  project_data: number;
+  zerotts_cache: number;
+  voice_data: number;
+  logs: number;
+  total: number;
+};
+
 export type VoiceProfile = {
   id: string;
   name: string;

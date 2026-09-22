@@ -174,6 +174,22 @@ Cài Xcode Command Line Tools:
 xcode-select --install
 ```
 
+Nếu Rust báo `malformed file` hoặc `unknown architecture arm64e.x1-*` trong
+`MacOSX*.sdk/usr/lib/*.tbd`, Command Line Tools và macOS SDK trên máy đang lệch
+phiên bản. Gỡ và cài lại CLT, rồi mở Terminal mới:
+
+```bash
+sudo rm -rf /Library/Developer/CommandLineTools
+xcode-select --install
+```
+
+Chỉ khi đã cài Xcode đầy đủ tại `/Applications/Xcode.app`, cập nhật Xcode rồi
+chọn lại developer directory:
+
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
+
 Sau đó:
 
 ```bash

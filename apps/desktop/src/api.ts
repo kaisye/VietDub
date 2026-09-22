@@ -9,6 +9,7 @@ import type {
   QuickVideoJobInput,
   RuntimeOptions,
   RuntimeSettings,
+  StorageUsage,
   SourceVideoUpload,
   SubtitleStyle,
   SubtitleStylePreset,
@@ -79,6 +80,20 @@ export const updateRuntimeSettings = (payload: Partial<RuntimeSettings>) =>
 
 export const getRuntimeOptions = () =>
   request<RuntimeOptions>("/settings/runtime/options", { cache: "no-store" });
+
+export const getStorageUsage = () =>
+  request<StorageUsage>("/storage-management/usage", { cache: "no-store" });
+
+export const cleanupStorage = (target: "temporary" | "zerotts_cache") =>
+  request<{ removed_bytes: number; usage: StorageUsage }>("/storage-management/cleanup", {
+    method: "POST",
+    body: JSON.stringify({ target }),
+  });
+
+export const revealStorage = () =>
+  request<{ status: string; folder: string }>("/storage-management/reveal", {
+    method: "POST",
+  });
 
 export const getVoiceOptions = () =>
   request<VoiceProfile[]>("/voice-options", { cache: "no-store" });

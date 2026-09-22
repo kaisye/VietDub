@@ -413,12 +413,18 @@ def _snapshot_voice(configuration: dict[str, Any]) -> None:
     # Voice-dependent values can be inherited from a preset that selected a
     # different voice. The selected library profile is authoritative for its
     # provider, synthesis mode, and clone reference.
-    uses_omnivoice = bool(
-        voice.omnivoice_mode
-        or voice.reference_audio_url
-        or voice.reference_audio_path
-        or voice.reference_text
-        or voice.reference_text_path
+    # ZeroTTS community packs may include a preview WAV. That file is only for
+    # auditioning the installed latent voice; it is not an OmniVoice cloning
+    # reference. An explicit engine always wins over reference-like metadata.
+    uses_omnivoice = voice.engine == "omnivoice" or (
+        voice.engine not in {"edge", "zerotts"}
+        and bool(
+            voice.omnivoice_mode
+            or voice.reference_audio_url
+            or voice.reference_audio_path
+            or voice.reference_text
+            or voice.reference_text_path
+        )
     )
     voice_data["provider"] = "omnivoice" if uses_omnivoice else (voice.engine or "auto")
     voice_data["mode"] = (
@@ -426,14 +432,18 @@ def _snapshot_voice(configuration: dict[str, Any]) -> None:
         if uses_omnivoice
         else ""
     )
-    voice_data["reference"] = {
-        "asset_id": "",
-        "url": voice.reference_audio_url,
-        "path": voice.reference_audio_path,
-        "text": voice.reference_text,
-        "text_path": voice.reference_text_path,
-        "sha256": "",
-    }
+    voice_data["reference"] = (
+        {
+            "asset_id": "",
+            "url": voice.reference_audio_url,
+            "path": voice.reference_audio_path,
+            "text": voice.reference_text,
+            "text_path": voice.reference_text_path,
+            "sha256": "",
+        }
+        if uses_omnivoice
+        else {}
+    )
     if not voice_data.get("instruction"):
         voice_data["instruction"] = voice.instruction
 

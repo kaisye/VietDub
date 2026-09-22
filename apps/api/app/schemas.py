@@ -160,6 +160,23 @@ class MediaJobVoiceRerenderRequest(BaseModel):
     voice_id: str = Field(min_length=1, max_length=160)
 
 
+class StorageUsageOut(BaseModel):
+    project_data: int
+    zerotts_cache: int
+    voice_data: int
+    logs: int
+    total: int
+
+
+class StorageCleanupRequest(BaseModel):
+    target: Literal["temporary", "zerotts_cache"]
+
+
+class StorageCleanupOut(BaseModel):
+    removed_bytes: int
+    usage: StorageUsageOut
+
+
 class MediaJobOut(BaseModel):
     id: str
     video_id: str | None = None

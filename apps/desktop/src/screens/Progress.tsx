@@ -89,6 +89,8 @@ function voiceNeedsOmniVoice(voiceId: string, profiles: VoiceProfile[]): boolean
   if (!voiceId || voiceId === "none") return false;
   const profile = profiles.find((p) => p.id === voiceId);
   if (!profile) return false;
+  if (profile.engine === "zerotts" || profile.engine === "edge") return false;
+  if (profile.engine === "omnivoice") return true;
   if (profile.omnivoice_mode === "clone" || profile.omnivoice_mode === "design") return true;
   return !!(profile.reference_audio_url || profile.reference_audio_path);
 }

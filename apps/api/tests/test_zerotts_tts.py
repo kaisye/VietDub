@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 import numpy as np
 import httpx
-from app.services import tts, zerotts_tts
+from app.services import production_configuration, tts, zerotts_tts
 from app.services.production_configuration import migrate_configuration_document
 from app.services.runtime_settings import RuntimeSettings, get_runtime_settings
 from app.services.tts_runtime import RUNTIME_ZEROTTS, resolve_effective_tts_runtime
-from app.services.voice_options import canonical_voice_id, list_voice_options
+from app.services.voice_options import VoiceOption, canonical_voice_id, list_voice_options
 
 
 def test_zerotts_presets_are_exposed_in_voice_catalog() -> None:
@@ -28,6 +28,17 @@ def test_zerotts_provider_resolves_without_gpu_probes() -> None:
     settings = RuntimeSettings(tts_provider="zerotts")
 
     assert resolve_effective_tts_runtime(settings) == RUNTIME_ZEROTTS
+
+
+def test_zerotts_uses_two_threads_by_default_on_apple_silicon(monkeypatch) -> None:
+    monkeypatch.delenv("AETHER_ZEROTTS_THREADS", raising=False)
+    monkeypatch.setattr(zerotts_tts.sys, "platform", "darwin")
+    monkeypatch.setattr(zerotts_tts.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(zerotts_tts.os, "cpu_count", lambda: 8)
+    assert zerotts_tts._thread_count() == 2
+
+    monkeypatch.setenv("AETHER_ZEROTTS_THREADS", "4")
+    assert zerotts_tts._thread_count() == 4
 
 
 def test_removed_nghitts_settings_and_voice_ids_migrate(tmp_path: Path, monkeypatch) -> None:
@@ -56,6 +67,30 @@ def test_provider_dispatches_to_zerotts(tmp_path: Path) -> None:
         tts._save_provider_tts("Xin chào", "zerotts_maichi", output, "+0%")
 
     synthesize.assert_called_once_with("Xin chào", "zerotts_maichi", output, "+0%")
+
+
+def test_community_preview_does_not_route_voice_to_omnivoice(monkeypatch) -> None:
+    voice = VoiceOption(
+        id="zerotts_community_test",
+        name="Community Test",
+        locale="vi-VN",
+        language="Vietnamese",
+        type="ZeroTTS Community",
+        reference_audio_path="/tmp/community-preview.wav",
+        engine="zerotts",
+    )
+    monkeypatch.setattr(
+        production_configuration,
+        "list_voice_options",
+        lambda: [voice],
+    )
+    configuration = {"voice": {"voice_id": voice.id}}
+
+    production_configuration._snapshot_voice(configuration)
+
+    assert configuration["voice"]["provider"] == "zerotts"
+    assert configuration["voice"]["mode"] == ""
+    assert configuration["voice"]["reference"] == {}
 
 
 def test_synthesize_normalizes_chunks_and_writes_wav(tmp_path: Path, monkeypatch) -> None:
@@ -186,3 +221,41 @@ def test_catalog_voice_download_is_converted_and_installed(
     refreshed = zerotts_tts.fetch_zerotts_community_catalog()
     assert refreshed[0]["installed"] is True
     assert refreshed[0]["installed_voice_id"] == installed.id
+
+
+def test_featured_community_voices_are_first_in_catalog(monkeypatch) -> None:
+    records = [
+        {
+            "voice_id": "another-community-voice",
+            "name": "Giọng Khác",
+            "status": "completed",
+        },
+        {
+            "voice_id": "MAJfDVfQqPF5Fr4DvibN",
+            "name": "Thức Dậy Đi",
+            "status": "completed",
+        },
+        {
+            "voice_id": "7owuK1LaOPOaQjeSzmQ4",
+            "name": "Ngọc Huyền",
+            "status": "completed",
+        },
+    ]
+
+    def fake_get(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={"items": records},
+            request=httpx.Request("GET", str(url)),
+        )
+
+    monkeypatch.setattr(zerotts_tts.httpx, "get", fake_get)
+    monkeypatch.setattr(zerotts_tts, "list_zerotts_community_voices", lambda: [])
+
+    catalog = zerotts_tts.fetch_zerotts_community_catalog()
+
+    assert [voice["name"] for voice in catalog] == [
+        "Ngọc Huyền",
+        "Thức Dậy Đi",
+        "Giọng Khác",
+    ]

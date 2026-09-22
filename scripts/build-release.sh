@@ -9,6 +9,49 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
+# Fail before downloading/building dependencies when macOS developer tools and
+# the active SDK are from different releases.  The mismatch otherwise surfaces
+# much later as opaque Rust crate failures (for example, `quote` or `serde`).
+TOOLCHAIN_PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vietdub-toolchain.XXXXXX")"
+trap 'rm -rf "$TOOLCHAIN_PROBE_DIR"' EXIT
+TOOLCHAIN_PROBE_LOG="$TOOLCHAIN_PROBE_DIR/linker.log"
+if ! printf 'int main(void) { return 0; }\n' | xcrun --sdk macosx clang -x c - \
+  -o "$TOOLCHAIN_PROBE_DIR/probe" 2>"$TOOLCHAIN_PROBE_LOG"; then
+  # Some CLT installations leave a newer, incompatible SDK selected while a
+  # working SDK is also installed. Pick the newest linkable real SDK directory.
+  DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
+  COMPATIBLE_SDK=""
+  for CANDIDATE_SDK in "$DEVELOPER_DIR"/SDKs/MacOSX*.sdk; do
+    [[ -d "$CANDIDATE_SDK" && ! -L "$CANDIDATE_SDK" ]] || continue
+    if printf 'int main(void) { return 0; }\n' | \
+      SDKROOT="$CANDIDATE_SDK" xcrun clang -isysroot "$CANDIDATE_SDK" -x c - \
+        -o "$TOOLCHAIN_PROBE_DIR/probe" 2>/dev/null; then
+      COMPATIBLE_SDK="$CANDIDATE_SDK"
+    fi
+  done
+
+  if [[ -n "$COMPATIBLE_SDK" ]]; then
+    export SDKROOT="$COMPATIBLE_SDK"
+    echo "Default macOS SDK is not linkable; using compatible SDK: $SDKROOT"
+  else
+    cat "$TOOLCHAIN_PROBE_LOG" >&2
+  cat >&2 <<'EOF'
+
+The active macOS SDK cannot be linked by the selected developer tools.
+This is a system toolchain problem, not a Rust/Tauri dependency problem.
+
+Reinstall or update Xcode Command Line Tools, then retry:
+  sudo rm -rf /Library/Developer/CommandLineTools
+  xcode-select --install
+
+Only if full Xcode is installed at /Applications/Xcode.app, select its
+matching toolchain instead:
+  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+EOF
+    exit 1
+  fi
+fi
+
 VERSION="${1:-$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")}" 
 PYTHON="${PYTHON:-python3.12}"
 VENV="$ROOT/.build/venv-macos-arm64"
