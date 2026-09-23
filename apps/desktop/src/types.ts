@@ -26,6 +26,15 @@ export type RuntimeSettings = {
   ngrok_domain: string;
 };
 
+export type TranslationRouterStatus = {
+  ready: boolean;
+  running: boolean;
+  state: string;
+  message: string;
+  configured_model: string;
+  models: string[];
+};
+
 export type GpuInfo = { index: number; name: string; memory_gb: number };
 
 export type RuntimeOptions = {

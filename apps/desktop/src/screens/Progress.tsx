@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getVoiceOptions, outputUrl, rerenderJobVoice, retryJob, revealJob, voicePreviewUrl } from "../api";
+import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getTranslationRouterStatus, getVoiceOptions, outputUrl, rerenderJobVoice, retryJob, revealJob, voicePreviewUrl } from "../api";
 import type { Job, RuntimeOptions, RuntimeSettings, VoiceProfile } from "../types";
 import { useT } from "../i18n";
 import { openUrl } from "../lib/open-url";
@@ -578,7 +578,12 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
     setError("");
     try {
       await ensureRouter();
-      await openUrl(ROUTER_DASHBOARD).catch(() => undefined);
+      const status = await getTranslationRouterStatus();
+      if (!status.ready) {
+        await openUrl(ROUTER_DASHBOARD).catch(() => undefined);
+        setError(status.message);
+        return;
+      }
       await retryJob(jobId);
       setPollKey((k) => k + 1);
     } catch (e) {
@@ -982,7 +987,7 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
                 >
                   {retrying || recovering
                     ? t.progress_retrying
-                    : isVI ? "Khởi động 9router & Thử lại" : "Start 9router & retry"}
+                    : isVI ? "Kiểm tra cấu hình & Thử lại" : "Check configuration & retry"}
                 </button>
               </div>
             </>

@@ -58,6 +58,7 @@ from .schemas import (
     RunVideosRequest,
     RuntimeSettingsOut,
     RuntimeSettingsPatch,
+    TranslationRouterStatusOut,
     ScheduleRequest,
     SpeakerMappingPatch,
     SpeakerOut,
@@ -140,6 +141,7 @@ from .services.runtime_settings import (
 )
 from .services.runtime_hardware import detect_omnivoice_runtime_options
 from .services.tts_runtime import resolve_effective_tts_runtime
+from .services.translator import translation_router_status
 from .services.omnivoice_local_runtime import (
     local_omnivoice_status,
     start_local_omnivoice,
@@ -700,6 +702,11 @@ def _debug_http_json(base_url: str, path: str) -> dict[str, object]:
 @app.get("/settings/runtime", response_model=RuntimeSettingsOut)
 def read_runtime_settings() -> RuntimeSettingsOut:
     return _runtime_settings_response()
+
+
+@app.get("/settings/runtime/translation/status", response_model=TranslationRouterStatusOut)
+def read_translation_router_status() -> TranslationRouterStatusOut:
+    return TranslationRouterStatusOut.model_validate(translation_router_status())
 
 
 @app.get("/settings/runtime/options", response_model=OmniVoiceRuntimeOptionsOut)

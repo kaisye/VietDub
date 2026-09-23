@@ -1027,8 +1027,8 @@ _ROUTER_UNREACHABLE_MESSAGE = (
     "rồi bấm Thử lại."
 )
 _ROUTER_UNCONFIGURED_MESSAGE = (
-    "9router chưa được cấu hình: cần đăng nhập provider hoặc thêm API key trong "
-    "dashboard 9router (127.0.0.1:20128). Mở dashboard để cấu hình rồi bấm Thử lại."
+    "9router chưa được cấu hình: cần đăng nhập hoặc kết nối provider trong dashboard "
+    "9router (127.0.0.1:20128). Cấu hình provider/model rồi bấm Thử lại."
 )
 
 
@@ -1062,6 +1062,65 @@ def _request_translation_completion(model: str, system_prompt: str, user_prompt:
 
     response.raise_for_status()
     return _extract_chat_completion_content(response.json())
+
+
+def translation_router_status() -> dict[str, object]:
+    """Verify that 9router has a provider and can serve the selected model."""
+    settings = get_runtime_settings()
+    model = settings.local_translation_model.strip()
+    headers = {"Accept": "application/json"}
+
+    try:
+        response = httpx.get(_local_translation_models_url(), headers=headers, timeout=10)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError):
+        return {
+            "ready": False, "running": False, "state": "unreachable",
+            "message": "Không kết nối được 9router. Hãy khởi động hoặc cài đặt 9router trước.",
+            "configured_model": model, "models": [],
+        }
+
+    if response.status_code in (401, 403):
+        return {
+            "ready": False, "running": True,
+            "state": "provider_not_configured",
+            "message": "9router đang chạy nhưng chưa có provider hoạt động. Hãy đăng nhập hoặc kết nối provider trong dashboard.",
+            "configured_model": model, "models": [],
+        }
+
+    if not response.is_success:
+        return {
+            "ready": False, "running": True, "state": "error",
+            "message": f"9router trả về HTTP {response.status_code}: {_router_error_detail(response)}",
+            "configured_model": model, "models": [],
+        }
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    models = sorted({
+        str(row.get("id", "")).strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    })
+    if not models:
+        return {
+            "ready": False, "running": True, "state": "no_models",
+            "message": "9router chưa có model khả dụng. Hãy đăng nhập hoặc kết nối provider trong dashboard.",
+            "configured_model": model, "models": [],
+        }
+    if model not in models:
+        return {
+            "ready": False, "running": True, "state": "model_not_found",
+            "message": f"Model '{model}' không có trong 9router. Hãy chọn một model khả dụng trong Cài đặt VietDub.",
+            "configured_model": model, "models": models,
+        }
+    return {
+        "ready": True, "running": True, "state": "ready",
+        "message": f"9router đã sẵn sàng với model '{model}'.",
+        "configured_model": model, "models": models,
+    }
 
 
 def _router_error_detail(response: httpx.Response) -> str:
@@ -1453,6 +1512,10 @@ def _local_translation_chat_url() -> str:
     if raw.endswith("/v1"):
         return f"{raw}/chat/completions"
     return f"{raw}/v1/chat/completions"
+
+
+def _local_translation_models_url() -> str:
+    return _local_translation_chat_url().removesuffix("/chat/completions") + "/models"
 
 
 def _local_translation_api_key() -> str | None:

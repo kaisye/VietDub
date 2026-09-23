@@ -42,12 +42,14 @@ import {
   createSubtitleStyle,
   createQuickVideoJob,
   getSubtitleStyles,
+  getTranslationRouterStatus,
   getVoiceOptions,
   outputUrl,
   previewSourceVideo,
   uploadSourceVideo,
   voicePreviewUrl,
 } from "../api";
+import { openUrl } from "../lib/open-url";
 import { subtitlePreviewStyle, subtitleSecondaryPreviewStyle } from "../lib/subtitle-style-preview";
 import { SOURCE_LANGUAGE_OPTIONS, TARGET_LANGUAGE_OPTIONS } from "../lib/translation-languages";
 import type { SubtitleStyle, SubtitleStylePreset, VoiceProfile } from "../types";
@@ -241,6 +243,13 @@ export default function NewVideoScreen({ onStarted }: { onStarted: (jobId: strin
     setSubmitError("");
     setSubmitting(run ? "run" : "draft");
     try {
+      if (run) {
+        const router = await getTranslationRouterStatus();
+        if (!router.ready) {
+          if (router.running) void openUrl("http://127.0.0.1:20128/dashboard");
+          throw new Error(router.message);
+        }
+      }
       let videoUrl = draft.source.url.trim();
       if (draft.source.method === "upload") {
         const file = selectedFileRef.current;

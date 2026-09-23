@@ -685,6 +685,15 @@ class RuntimeSettingsPatch(BaseModel):
     ngrok_domain: str | None = None
 
 
+class TranslationRouterStatusOut(BaseModel):
+    ready: bool = False
+    running: bool = False
+    state: str
+    message: str
+    configured_model: str = ""
+    models: list[str] = Field(default_factory=list)
+
+
 class WorkspaceSettingsOut(BaseModel):
     default_voice_id: str = "vi-VN-HoaiMyNeural"
 

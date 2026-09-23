@@ -9,6 +9,7 @@ import type {
   QuickVideoJobInput,
   RuntimeOptions,
   RuntimeSettings,
+  TranslationRouterStatus,
   StorageUsage,
   SourceVideoUpload,
   SubtitleStyle,
@@ -71,6 +72,9 @@ export async function pingWithRetry(
 // --- Settings ---------------------------------------------------------------
 export const getRuntimeSettings = () =>
   request<RuntimeSettings>("/settings/runtime", { cache: "no-store" });
+
+export const getTranslationRouterStatus = () =>
+  request<TranslationRouterStatus>("/settings/runtime/translation/status", { cache: "no-store" });
 
 export const updateRuntimeSettings = (payload: Partial<RuntimeSettings>) =>
   request<RuntimeSettings>("/settings/runtime", {

@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import {
   getRuntimeOptions,
   getRuntimeSettings,
+  getTranslationRouterStatus,
   getStorageUsage,
   getVoiceOptions,
   cleanupStorage,
   revealStorage,
   updateRuntimeSettings,
 } from "../api";
-import type { RuntimeOptions, RuntimeSettings, StorageUsage, VoiceProfile } from "../types";
+import type { RuntimeOptions, RuntimeSettings, StorageUsage, TranslationRouterStatus, VoiceProfile } from "../types";
 import { TARGET_LANGUAGES } from "../languages";
 import { loadDefaults, saveDefaults } from "../App";
 import { useT } from "../i18n";
@@ -22,6 +23,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [nvidiaKey, setNvidiaKey] = useState("");
   const [groqKey, setGroqKey] = useState("");
+  const [routerStatus, setRouterStatus] = useState<TranslationRouterStatus | null>(null);
+  const [checkingRouter, setCheckingRouter] = useState(false);
   const [defaults, setDefaults] = useState(loadDefaults());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -44,6 +47,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         setSettings(s);
         setOptions(o);
         setVoices(v);
+        void getTranslationRouterStatus().then(setRouterStatus).catch(() => undefined);
         await loadStorageUsage();
       } catch (e) {
         setError(e instanceof Error ? e.message : t.error_load);
@@ -115,6 +119,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
       setSettings(updated);
       setNvidiaKey("");
       setGroqKey("");
+      setRouterStatus(await getTranslationRouterStatus().catch(() => null));
       saveDefaults(defaults);
       setSaved(true);
       setOptions(await getRuntimeOptions().catch(() => options));
@@ -122,6 +127,25 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
       setError(e instanceof Error ? e.message : t.error_save);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function checkRouterConfiguration() {
+    if (!settings) return;
+    setCheckingRouter(true);
+    setError("");
+    try {
+      const payload: Partial<RuntimeSettings> = {
+        local_translation_base_url: settings.local_translation_base_url,
+        local_translation_model: settings.local_translation_model,
+      };
+      const updated = await updateRuntimeSettings(payload);
+      setSettings(updated);
+      setRouterStatus(await getTranslationRouterStatus());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.error_load);
+    } finally {
+      setCheckingRouter(false);
     }
   }
 
@@ -206,12 +230,37 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         </div>
         <div className="field">
           <label>{t.translation_model}</label>
-          <input
-            type="text"
-            value={settings.local_translation_model}
-            onChange={(e) => patch("local_translation_model", e.target.value)}
-            placeholder="translate"
-          />
+          {routerStatus?.models.length ? (
+            <select
+              value={settings.local_translation_model}
+              onChange={(e) => patch("local_translation_model", e.target.value)}
+            >
+              {!routerStatus.models.includes(settings.local_translation_model) ? (
+                <option value={settings.local_translation_model}>{settings.local_translation_model}</option>
+              ) : null}
+              {routerStatus.models.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={settings.local_translation_model}
+              onChange={(e) => patch("local_translation_model", e.target.value)}
+              placeholder="provider/model-name"
+            />
+          )}
+        </div>
+        {routerStatus ? (
+          <div className={`banner ${routerStatus.ready ? "ok" : "err"}`} style={{ marginBottom: 12 }}>
+            {routerStatus.message}
+          </div>
+        ) : null}
+        <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <button className="btn" disabled={checkingRouter} onClick={() => void checkRouterConfiguration()}>
+            {checkingRouter ? "Đang kiểm tra…" : "Lưu & kiểm tra kết nối"}
+          </button>
+          <button className="btn" onClick={() => void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`)}>
+            Mở dashboard 9router
+          </button>
         </div>
       </div>
 
