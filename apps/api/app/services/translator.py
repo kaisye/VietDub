@@ -1027,8 +1027,9 @@ _ROUTER_UNREACHABLE_MESSAGE = (
     "rồi bấm Thử lại."
 )
 _ROUTER_UNCONFIGURED_MESSAGE = (
-    "9router chưa được cấu hình: cần đăng nhập hoặc kết nối provider trong dashboard "
-    "9router (127.0.0.1:20128). Cấu hình provider/model rồi bấm Thử lại."
+    "9router đang chạy nhưng model dịch chưa gọi được provider. 9router không cần API key "
+    "từ VietDub; hãy mở dashboard 127.0.0.1:20128, đăng nhập/kết nối một provider và "
+    "gán provider đó cho model 'translate', rồi bấm Kiểm tra cấu hình & Thử lại."
 )
 
 
@@ -1116,11 +1117,62 @@ def translation_router_status() -> dict[str, object]:
             "message": f"Model '{model}' không có trong 9router. Hãy chọn một model khả dụng trong Cài đặt VietDub.",
             "configured_model": model, "models": models,
         }
+    # /v1/models only proves that the router process knows the virtual model.
+    # 9router can list `translate` even when that combo has no authenticated
+    # upstream provider. Probe a tiny real completion so the UI cannot start an
+    # expensive job (or retry it forever) on a model that cannot route requests.
+    try:
+        probe = _probe_translation_router(model)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError):
+        return {
+            "ready": False, "running": True, "state": "probe_failed",
+            "message": "9router đang chạy nhưng request kiểm tra provider bị gián đoạn. Hãy kiểm tra mạng/provider rồi thử lại.",
+            "configured_model": model, "models": models,
+        }
+    if probe.status_code in (401, 403):
+        return {
+            "ready": False, "running": True, "state": "provider_not_configured",
+            "message": _ROUTER_UNCONFIGURED_MESSAGE,
+            "configured_model": model, "models": models,
+        }
+    if not probe.is_success:
+        return {
+            "ready": False, "running": True, "state": "probe_failed",
+            "message": (
+                f"Model '{model}' có trong danh sách nhưng chưa dịch được "
+                f"(HTTP {probe.status_code}): {_router_error_detail(probe)}"
+            ),
+            "configured_model": model, "models": models,
+        }
+    try:
+        _extract_chat_completion_content(probe.json())
+    except (ValueError, RuntimeError):
+        return {
+            "ready": False, "running": True, "state": "invalid_response",
+            "message": f"Model '{model}' phản hồi sai định dạng. Hãy chọn/gán provider khác trong dashboard 9router.",
+            "configured_model": model, "models": models,
+        }
     return {
         "ready": True, "running": True, "state": "ready",
-        "message": f"9router đã sẵn sàng với model '{model}'.",
+        "message": f"9router đã kiểm tra dịch thực tế thành công với model '{model}'.",
         "configured_model": model, "models": models,
     }
+
+
+def _probe_translation_router(model: str) -> httpx.Response:
+    """Send the smallest useful request; model listing alone is a false positive."""
+    return httpx.post(
+        _local_translation_chat_url(),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "max_tokens": 8,
+            "temperature": 0,
+            "stream": False,
+        },
+        timeout=30,
+    )
 
 
 def _router_error_detail(response: httpx.Response) -> str:

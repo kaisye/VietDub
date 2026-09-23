@@ -13,11 +13,11 @@ def _settings(model: str = "translate") -> SimpleNamespace:
     )
 
 
-def _response(status: int, payload: dict) -> httpx.Response:
+def _response(status: int, payload: dict, method: str = "GET", path: str = "/v1/models") -> httpx.Response:
     return httpx.Response(
         status,
         json=payload,
-        request=httpx.Request("GET", "http://127.0.0.1:20128/v1/models"),
+        request=httpx.Request(method, f"http://127.0.0.1:20128{path}"),
     )
 
 
@@ -62,8 +62,51 @@ def test_router_status_is_ready_for_configured_combo(monkeypatch) -> None:
         "get",
         lambda *args, **kwargs: _response(200, {"data": [{"id": "translate"}]}),
     )
+    request_headers: dict[str, str] = {}
+
+    def fake_post(url, *, headers, json, timeout):
+        assert url == "http://127.0.0.1:20128/v1/chat/completions"
+        assert json["model"] == "translate"
+        assert json["max_tokens"] == 8
+        assert timeout == 30
+        request_headers.update(headers)
+        return _response(
+            200,
+            {"choices": [{"message": {"content": "OK"}}]},
+            method="POST",
+            path="/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(translator.httpx, "post", fake_post)
 
     status = translator.translation_router_status()
 
     assert status["state"] == "ready"
     assert status["ready"] is True
+    assert "Authorization" not in request_headers
+
+
+def test_router_model_listing_is_not_ready_when_real_request_cannot_route(monkeypatch) -> None:
+    monkeypatch.setattr(translator, "get_runtime_settings", _settings)
+    monkeypatch.setattr(
+        translator.httpx,
+        "get",
+        lambda *args, **kwargs: _response(200, {"data": [{"id": "translate"}]}),
+    )
+    monkeypatch.setattr(
+        translator.httpx,
+        "post",
+        lambda *args, **kwargs: _response(
+            401,
+            {"error": {"message": "No available provider account"}},
+            method="POST",
+            path="/v1/chat/completions",
+        ),
+    )
+
+    status = translator.translation_router_status()
+
+    assert status["ready"] is False
+    assert status["state"] == "provider_not_configured"
+    assert "không cần API key từ VietDub" in status["message"]
+    assert status["models"] == ["translate"]
