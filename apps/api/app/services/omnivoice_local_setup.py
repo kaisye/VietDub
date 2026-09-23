@@ -201,23 +201,19 @@ def _run_setup(base_python: list[str] | None, target: str) -> None:
             "installing_torch",
             f"Installing PyTorch ({target}) — this can take several minutes…",
         )
-        torch_cmd = [str(venv_python), "-m", "pip", "install", "torch", "torchaudio"]
-        if target == "cu128":
-            torch_cmd += ["--index-url", TORCH_CUDA_INDEX]
-        elif target == "cu126":
-            torch_cmd += ["--index-url", TORCH_CUDA_LEGACY_INDEX]
-        elif target == "cu118":
-            torch_cmd += ["--index-url", TORCH_CUDA_OLD_DRIVER_INDEX]
-        elif target == "cpu":
-            torch_cmd += ["--index-url", TORCH_CPU_INDEX]
-        # "mps" uses the default PyPI index.
-        _run(torch_cmd)
+        requested_target = target
+        target = _install_torch(venv_python, target)
 
         _set_state("installing_deps", "Installing OmniVoice dependencies…")
         _run([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_PATH)])
 
         _set_state("verifying", "Verifying installation…")
-        ready_message = "OmniVoice environment is ready."
+        ready_message = (
+            "OmniVoice đã sẵn sàng bằng CPU vì không thể cài bản GPU; "
+            "tạo giọng sẽ chậm hơn."
+            if target == "cpu" and requested_target.startswith("cu")
+            else "OmniVoice environment is ready."
+        )
         try:
             _verify(venv_python, target)
         except Exception as exc:
@@ -275,9 +271,67 @@ def _run(cmd: list[str]) -> None:
             creationflags=creation_flags,
         )
     if result.returncode != 0:
+        log_excerpt = _command_failure_excerpt()
+        detail = f"\nChi tiết:\n{log_excerpt}" if log_excerpt else ""
         raise RuntimeError(
-            f"Command failed (exit {result.returncode}): {' '.join(cmd)}. See setup log for details."
+            f"Command failed (exit {result.returncode}): {' '.join(cmd)}.{detail}"
         )
+
+
+def _torch_install_command(venv_python: Path, target: str, *, force: bool = False) -> list[str]:
+    command = [str(venv_python), "-m", "pip", "install"]
+    if force:
+        command.append("--force-reinstall")
+    # Slow or unstable Windows connections regularly time out while downloading
+    # the 2–3 GB CUDA wheels. Make the installer resilient before giving up.
+    command += ["--retries", "8", "--timeout", "120", "torch", "torchaudio"]
+    index = {
+        "cu128": TORCH_CUDA_INDEX,
+        "cu126": TORCH_CUDA_LEGACY_INDEX,
+        "cu118": TORCH_CUDA_OLD_DRIVER_INDEX,
+        "cpu": TORCH_CPU_INDEX,
+    }.get(target)
+    if index:
+        command += ["--index-url", index]
+    return command
+
+
+def _install_torch(venv_python: Path, target: str) -> str:
+    """Install the selected wheel, falling back to a working CPU build."""
+    global _target
+    try:
+        _run(_torch_install_command(venv_python, target))
+        return target
+    except RuntimeError as exc:
+        if not target.startswith("cu"):
+            raise
+        _log(f"[{_now()}] PyTorch {target} install failed; falling back to CPU: {exc}\n")
+        _set_state(
+            "installing_torch",
+            "Không thể cài bản GPU — đang tự động cài PyTorch CPU…",
+        )
+        try:
+            _run(_torch_install_command(venv_python, "cpu", force=True))
+        except RuntimeError as cpu_exc:
+            raise RuntimeError(
+                f"Cài PyTorch GPU ({target}) thất bại và bản CPU dự phòng cũng thất bại. "
+                f"GPU: {exc}\nCPU: {cpu_exc}"
+            ) from cpu_exc
+        with _lock:
+            _target = "cpu"
+        return "cpu"
+
+
+def _command_failure_excerpt() -> str:
+    """Return the useful pip error tail instead of hiding it in a log file."""
+    tail = _tail_log(6000)
+    if not tail:
+        return ""
+    lines = [line for line in tail.splitlines() if line.strip()]
+    markers = ("error", "failed", "could not", "no matching", "exception", "errno")
+    relevant = [line for line in lines if any(marker in line.casefold() for marker in markers)]
+    selected = relevant[-8:] if relevant else lines[-12:]
+    return "\n".join(selected)[-3000:]
 
 
 def _driver_note() -> str:

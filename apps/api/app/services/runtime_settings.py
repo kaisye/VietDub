@@ -68,7 +68,7 @@ def get_runtime_settings() -> RuntimeSettings:
             os.getenv("AETHER_PREFER_EXISTING_SUBTITLES"),
             default=True,
         ),
-        nvidia_api_key=str(data.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")).strip(),
+        nvidia_api_key=_stored_secret(data, "nvidia_api_key", "NVIDIA_API_KEY"),
         omnivoice_runtime=configured_runtime,
         omnivoice_device=str(data.get("omnivoice_device") or os.getenv("OMNIVOICE_DEVICE_MAP", "auto")).strip(),
         omnivoice_api_url=configured_url,
@@ -108,9 +108,7 @@ def get_runtime_settings() -> RuntimeSettings:
         huggingface_token=str(
             data.get("huggingface_token") or os.getenv("HF_TOKEN", "")
         ).strip(),
-        groq_api_key=str(
-            data.get("groq_api_key") or os.getenv("GROQ_API_KEY", "")
-        ).strip(),
+        groq_api_key=_stored_secret(data, "groq_api_key", "GROQ_API_KEY"),
         ngrok_authtoken=str(
             data.get("ngrok_authtoken") or os.getenv("NGROK_AUTHTOKEN", "")
         ).strip(),
@@ -125,7 +123,15 @@ def update_runtime_settings(values: dict[str, Any]) -> RuntimeSettings:
     allowed = set(current)
     for key, value in values.items():
         if key in allowed and value is not None:
-            if key in {"huggingface_token", "omnivoice_api_key", "local_translation_api_key", "nvidia_api_key", "groq_api_key", "ngrok_authtoken"} and not str(value).strip():
+            # NVIDIA/Groq keys may be explicitly cleared from the desktop UI.
+            # Keep the previous write-only behavior for unrelated secrets so a
+            # masked/blank response cannot accidentally erase them.
+            if key in {
+                "huggingface_token",
+                "omnivoice_api_key",
+                "local_translation_api_key",
+                "ngrok_authtoken",
+            } and not str(value).strip():
                 continue
             if isinstance(current[key], bool):
                 current[key] = _coerce_bool(value, None, default=current[key])
@@ -158,10 +164,15 @@ def apply_runtime_secrets_to_env(settings: RuntimeSettings | None = None) -> Non
     keeping all existing getenv call sites working without further changes.
     """
     settings = settings or get_runtime_settings()
-    if settings.nvidia_api_key:
-        os.environ["NVIDIA_API_KEY"] = settings.nvidia_api_key
-    if settings.groq_api_key:
-        os.environ["GROQ_API_KEY"] = settings.groq_api_key
+    _set_or_clear_env("NVIDIA_API_KEY", settings.nvidia_api_key)
+    _set_or_clear_env("GROQ_API_KEY", settings.groq_api_key)
+
+
+def _set_or_clear_env(name: str, value: str) -> None:
+    if value:
+        os.environ[name] = value
+    else:
+        os.environ.pop(name, None)
 
 
 def _read_settings_file() -> dict[str, Any]:
@@ -173,6 +184,12 @@ def _read_settings_file() -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _stored_secret(data: dict[str, Any], key: str, environment_name: str) -> str:
+    """Let an explicitly saved blank value override a stale process/system key."""
+    value = data[key] if key in data else os.getenv(environment_name, "")
+    return str(value or "").strip()
 
 
 def _settings_path() -> Path:

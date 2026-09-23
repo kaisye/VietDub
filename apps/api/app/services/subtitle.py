@@ -98,23 +98,26 @@ def extract_subtitle(
     if normalized_brief and os.getenv("AETHER_ALLOW_LOCAL_SUBTITLE_GENERATION") == "1":
         return _generate_subtitle_locally(video_path, normalized_brief, target_language)
 
-    stt_degraded_error: RuntimeError | None = None
+    stt_provider_error: RuntimeError | None = None
+    riva_authorization_failed = False
     if _stt_fallback_enabled() and _nvidia_configured():
         try:
             return _generate_subtitle_with_nvidia_whisper(video_path, target_language, source_language, source_url)
         except RuntimeError as exc:
-            if _is_riva_degraded_error(exc):
-                logger.warning(
-                    "NVIDIA Riva STT is temporarily DEGRADED for job %s. "
-                    "Trying Groq Whisper fallback next. Original error: %s",
-                    video_path.stem,
-                    exc,
-                )
-                stt_degraded_error = exc
-            else:
-                raise
+            # A configured key only proves that a value was saved; it does not
+            # prove that the key is valid or entitled to the Riva function. Any
+            # provider-side Riva failure should therefore hand off to the next
+            # STT provider instead of failing the whole job immediately.
+            logger.warning(
+                "NVIDIA Riva STT failed for job %s. Trying Groq Whisper "
+                "fallback next when configured. Original error: %s",
+                video_path.stem,
+                exc,
+            )
+            stt_provider_error = exc
+            riva_authorization_failed = _is_riva_authorization_error(exc)
 
-    # Groq Whisper fallback — used when Riva is degraded or not configured.
+    # Groq Whisper fallback — used whenever Riva fails or is not configured.
     if _groq_stt_enabled() and _groq_stt_configured():
         try:
             logger.info("Running Groq Whisper STT for job %s.", video_path.stem)
@@ -125,16 +128,21 @@ def extract_subtitle(
                 video_path.stem,
                 exc,
             )
-            if stt_degraded_error is None:
-                stt_degraded_error = exc
+            if stt_provider_error is None:
+                stt_provider_error = exc
 
     # Only use LLM brief generation when the brief is long enough to be meaningful.
     # Short job titles (e.g. "Video1", "test") produce hallucinated content that has
     # nothing to do with the actual video. The threshold is configurable so users who
     # deliberately provide short keywords can lower it via AETHER_BRIEF_MIN_LENGTH.
     brief_min_length = int(os.getenv("AETHER_BRIEF_MIN_LENGTH", "30"))
-    if normalized_brief and len(normalized_brief) >= brief_min_length and _nvidia_configured():
-        if stt_degraded_error is not None:
+    if (
+        normalized_brief
+        and len(normalized_brief) >= brief_min_length
+        and _nvidia_configured()
+        and not riva_authorization_failed
+    ):
+        if stt_provider_error is not None:
             logger.warning(
                 "Riva STT unavailable — generating subtitles from LLM brief (%d chars). "
                 "The result reflects the brief, not the actual audio. "
@@ -143,18 +151,25 @@ def extract_subtitle(
             )
         return _generate_subtitle_with_nvidia(video_path, normalized_brief, target_language, source_url)
 
-    if stt_degraded_error is not None:
+    if stt_provider_error is not None:
+        if riva_authorization_failed:
+            raise RuntimeError(
+                "NVIDIA Riva từ chối quyền truy cập (PERMISSION_DENIED). API key đã lưu "
+                "không hợp lệ hoặc chưa được cấp quyền dùng Riva/Whisper. Hãy thay khóa "
+                "NVIDIA, cấu hình Groq Whisper dự phòng, hoặc cung cấp file SRT rồi Thử lại. "
+                f"Lỗi gốc: {stt_provider_error}"
+            )
         if normalized_brief:
             raise RuntimeError(
-                "NVIDIA Riva STT is temporarily DEGRADED and the provided brief is too short "
+                "NVIDIA Riva STT failed and the provided brief is too short "
                 f"({len(normalized_brief)} chars, minimum {brief_min_length}) to generate reliable subtitles. "
                 "Retry later, or attach a proper .srt sidecar file to your upload. "
-                f"Original error: {stt_degraded_error}"
+                f"Original error: {stt_provider_error}"
             )
         raise RuntimeError(
-            "NVIDIA Riva STT is temporarily DEGRADED and no LLM brief fallback is available. "
+            "NVIDIA Riva STT failed and no LLM brief fallback is available. "
             "Retry later, or provide an SRT file manually. "
-            f"Original error: {stt_degraded_error}"
+            f"Original error: {stt_provider_error}"
         )
 
     raise ValueError(_missing_subtitle_message(source_url, bool(normalized_brief)))
@@ -1201,9 +1216,20 @@ def _stt_fallback_enabled() -> bool:
     return os.getenv("AETHER_STT_FALLBACK_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
-def _is_riva_degraded_error(exc: Exception) -> bool:
-    msg = str(exc)
-    return "DEGRADED" in msg or ("INVALID_ARGUMENT" in msg and "degraded" in msg.lower())
+def _is_riva_authorization_error(exc: Exception) -> bool:
+    """Recognize gRPC/NVCF authorization failures without importing grpc."""
+    message = str(exc).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "permission_denied",
+            "permissiondenied",
+            "authorization failed",
+            "unauthenticated",
+            "invalid api key",
+            "invalid_api_key",
+        )
+    )
 
 
 # ── Groq Whisper STT ─────────────────────────────────────────────────────────

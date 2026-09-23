@@ -23,6 +23,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [nvidiaKey, setNvidiaKey] = useState("");
   const [groqKey, setGroqKey] = useState("");
+  const [clearingKey, setClearingKey] = useState<"nvidia" | "groq" | null>(null);
   const [routerStatus, setRouterStatus] = useState<TranslationRouterStatus | null>(null);
   const [checkingRouter, setCheckingRouter] = useState(false);
   const [defaults, setDefaults] = useState(loadDefaults());
@@ -149,6 +150,25 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
     }
   }
 
+  async function clearSttKey(provider: "nvidia" | "groq") {
+    setClearingKey(provider);
+    setError("");
+    setSaved(false);
+    try {
+      const updated = await updateRuntimeSettings(
+        provider === "nvidia" ? { nvidia_api_key: "" } : { groq_api_key: "" },
+      );
+      setSettings(updated);
+      if (provider === "nvidia") setNvidiaKey("");
+      else setGroqKey("");
+      setSaved(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.error_save);
+    } finally {
+      setClearingKey(null);
+    }
+  }
+
   if (!settings) {
     return (
       <div className="page">
@@ -190,6 +210,19 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             placeholder={settings.nvidia_api_key_configured ? t.stt_key_configured : "nvapi-..."}
           />
           <div className="hint">{t.stt_key_hint}</div>
+          {settings.nvidia_api_key_configured ? (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={clearingKey !== null}
+              onClick={() => void clearSttKey("nvidia")}
+              style={{ marginTop: 8 }}
+            >
+              {clearingKey === "nvidia"
+                ? (lang === "vi" ? "Đang xóa…" : "Removing…")
+                : (lang === "vi" ? "Xóa khóa NVIDIA đã lưu" : "Remove saved NVIDIA key")}
+            </button>
+          ) : null}
         </div>
         <div className="field">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -209,6 +242,19 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             placeholder={settings.groq_api_key_configured ? t.groq_key_configured : "gsk_..."}
           />
           <div className="hint">{t.groq_key_hint}</div>
+          {settings.groq_api_key_configured ? (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={clearingKey !== null}
+              onClick={() => void clearSttKey("groq")}
+              style={{ marginTop: 8 }}
+            >
+              {clearingKey === "groq"
+                ? (lang === "vi" ? "Đang xóa…" : "Removing…")
+                : (lang === "vi" ? "Xóa khóa Groq đã lưu" : "Remove saved Groq key")}
+            </button>
+          ) : null}
         </div>
       </div>
 

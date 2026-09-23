@@ -18,7 +18,9 @@ from app.services.omnivoice_local_setup import (
     _managed_python_archive_name,
     _managed_python_path,
     _managed_python_url,
+    _install_torch,
     _select_torch_target,
+    _torch_install_command,
 )
 from app.services.runtime_hardware import _parse_compute_capability
 
@@ -125,3 +127,32 @@ def test_macos_managed_python_layout_is_unchanged():
     target = MANAGED_PYTHON_TARGETS["macos-arm64"]
     assert target.relative_exe == ("python", "bin", "python3")
     assert _managed_python_path("macos-arm64").parent.name == "bin"
+
+
+def test_cuda_install_failure_falls_back_to_cpu(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        if "cu118" in command[-1]:
+            raise RuntimeError("CUDA wheel download failed")
+
+    monkeypatch.setattr("app.services.omnivoice_local_setup._run", fake_run)
+    monkeypatch.setattr("app.services.omnivoice_local_setup._log", lambda _text: None)
+    monkeypatch.setattr("app.services.omnivoice_local_setup._set_state", lambda *_args: None)
+
+    selected = _install_torch(tmp_path / "python.exe", "cu118")
+
+    assert selected == "cpu"
+    assert calls[0][-1].endswith("/cu118")
+    assert calls[1][-1].endswith("/cpu")
+    assert "--force-reinstall" in calls[1]
+
+
+def test_torch_install_command_uses_plain_url_and_resilient_download_flags(tmp_path):
+    command = _torch_install_command(tmp_path / "python.exe", "cu118")
+
+    assert command[-1] == "https://download.pytorch.org/whl/cu118"
+    assert "[" not in command[-1]
+    assert command[command.index("--retries") + 1] == "8"
+    assert command[command.index("--timeout") + 1] == "120"
