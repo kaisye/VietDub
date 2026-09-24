@@ -339,8 +339,24 @@ def _download_with_ytdlp(
         _remove_previous_downloads(root, job_id)
         options = {**base_options, "format": format_selector}
         try:
-            with yt_dlp.YoutubeDL(options) as downloader:
-                downloader.download([url])
+            try:
+                with yt_dlp.YoutubeDL(options) as downloader:
+                    downloader.download([url])
+            except Exception as exc:
+                if not _is_http_decompression_error(exc):
+                    raise
+                # Some CDNs/proxies advertise gzip/deflate but send an
+                # uncompressed or truncated body. urllib/yt-dlp then raises
+                # zlib "incorrect header check" before the extractor sees the
+                # response. Retry this selector without HTTP compression.
+                identity_headers = {
+                    **dict(options.get("http_headers") or {}),
+                    "Accept-Encoding": "identity",
+                }
+                identity_options = {**options, "http_headers": identity_headers}
+                _remove_previous_downloads(root, job_id)
+                with yt_dlp.YoutubeDL(identity_options) as downloader:
+                    downloader.download([url])
             downloaded_videos = _downloaded_video_files(root, job_id)
             if downloaded_videos:
                 video_path = _prefer_video(downloaded_videos)
@@ -366,6 +382,28 @@ def _download_with_ytdlp(
     if download_subtitles:
         _download_sidecar_subtitle(url, root, job)
     return video_path
+
+
+def _is_http_decompression_error(exc: Exception) -> bool:
+    """Detect malformed Content-Encoding failures across zlib/urllib wrappers."""
+    messages: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current).casefold())
+        current = current.__cause__ or current.__context__
+    message = " ".join(messages)
+    return any(
+        marker in message
+        for marker in (
+            "incorrect header check",
+            "while decompressing data",
+            "failed to decode response",
+            "content decoding failed",
+            "invalid distance too far back",
+        )
+    )
 
 
 def _reject_unsupported_live_source(url: str, base_options: dict[str, object]) -> None:
