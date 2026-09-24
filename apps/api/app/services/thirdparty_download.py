@@ -187,8 +187,9 @@ def _tikwm_request(url: str) -> dict:
         "Referer": f"{_TIKWM_BASE}/",
     }
     for attempt in range(2):
-        response = requests.get(
-            _TIKWM_API, params={"url": url, "hd": 1}, headers=headers, timeout=45
+        response = _request_with_encoding_recovery(
+            "GET", _TIKWM_API,
+            params={"url": url, "hd": 1}, headers=headers, timeout=45,
         )
         response.raise_for_status()
         payload = response.json()
@@ -256,8 +257,8 @@ def _snapvideotools_request(url: str) -> dict:
     """
     message = ""
     for attempt in range(1 + len(_SNAPVIDEOTOOLS_RETRY_DELAYS)):
-        response = requests.post(
-            f"{_SNAPVIDEOTOOLS_BASE}/vi/api/snap",
+        response = _request_with_encoding_recovery(
+            "POST", f"{_SNAPVIDEOTOOLS_BASE}/vi/api/snap",
             json={"text": url},
             headers={
                 "User-Agent": _DESKTOP_UA,
@@ -299,8 +300,61 @@ def _stream_cdn(media_url: str, destination: Path) -> bool:
     referer = _cdn_referer(media_url)
     if referer:
         headers["Referer"] = referer
-    stream = requests.get(media_url, headers=headers, stream=True, timeout=180)
-    return _write_stream(stream, destination)
+    try:
+        with requests.get(media_url, headers=headers, stream=True, timeout=180) as stream:
+            return _write_stream(stream, destination)
+    except Exception as exc:
+        if not _is_content_decoding_error(exc):
+            raise
+        # requests may only discover a malformed gzip/deflate body while
+        # iter_content is streaming. Remove the partial file and request raw
+        # bytes from the CDN on the recovery attempt.
+        _remove_existing(destination)
+        identity_headers = {**headers, "Accept-Encoding": "identity"}
+        with requests.get(
+            media_url, headers=identity_headers, stream=True, timeout=180
+        ) as stream:
+            return _write_stream(stream, destination)
+
+
+def _request_with_encoding_recovery(method: str, url: str, **kwargs) -> requests.Response:
+    """Retry malformed compressed API responses with compression disabled."""
+    try:
+        response = requests.request(method, url, **kwargs)
+        # Decode now so ContentDecodingError is caught here rather than later
+        # when response.json()/text is called by the provider parser.
+        _ = response.content
+        return response
+    except Exception as exc:
+        if not _is_content_decoding_error(exc):
+            raise
+        headers = {**dict(kwargs.get("headers") or {}), "Accept-Encoding": "identity"}
+        retry_kwargs = {**kwargs, "headers": headers}
+        response = requests.request(method, url, **retry_kwargs)
+        _ = response.content
+        return response
+
+
+def _is_content_decoding_error(exc: Exception) -> bool:
+    messages: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current).casefold())
+        current = current.__cause__ or current.__context__
+    message = " ".join(messages)
+    return any(
+        marker in message
+        for marker in (
+            "incorrect header check",
+            "while decompressing data",
+            "contentdecodingerror",
+            "content decoding failed",
+            "failed to decode response",
+            "invalid distance too far back",
+        )
+    )
 
 
 def _write_stream(stream: requests.Response, destination: Path) -> bool:
