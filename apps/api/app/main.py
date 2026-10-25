@@ -1032,27 +1032,7 @@ async def preview_voice_option(voice_id: str):
                 ) from exc
         return FileResponse(preview_path, media_type="audio/mpeg")
 
-    voice_id_for_tts = (
-        voice.id if voice and voice.id.endswith("Neural") else "vi-VN-HoaiMyNeural"
-    )
-    preview_path = (
-        ensure_storage() / "voice-previews" / f"{_safe_filename(voice_id_for_tts)}.mp3"
-    )
-    if not preview_path.exists() or preview_path.stat().st_size == 0:
-        try:
-            import edge_tts
-
-            preview_path.parent.mkdir(parents=True, exist_ok=True)
-            communicate = edge_tts.Communicate(
-                sample_text, voice=voice_id_for_tts, rate="+0%"
-            )
-            await communicate.save(str(preview_path))
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500, detail=f"Unable to generate voice preview: {exc}"
-            ) from exc
-
-    return FileResponse(preview_path, media_type="audio/mpeg")
+    raise HTTPException(status_code=404, detail="This voice has no preview audio.")
 
 
 @app.post("/voice-references/upload", response_model=VoiceReferenceUploadOut)

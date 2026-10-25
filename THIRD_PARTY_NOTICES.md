@@ -7,7 +7,7 @@ are recorded in `package-lock.json`, `apps/api/requirements.txt` and
 Notable runtime components include:
 
 - Tauri, React and Rust ecosystem crates under their respective licenses.
-- FastAPI, Uvicorn, SQLAlchemy, PyInstaller, yt-dlp and Edge TTS.
+- FastAPI, Uvicorn, SQLAlchemy, PyInstaller and yt-dlp.
 - FFmpeg binaries supplied by `ffmpeg-static` / `ffprobe-static`. The selected
   FFmpeg build includes GPL components such as libx264 and libmp3lame; distributors
   must satisfy the corresponding GPL source and notice obligations.

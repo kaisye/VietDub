@@ -91,7 +91,7 @@ def test_regenerate_segment_audio_fits_to_next_cue(job_storage, monkeypatch) -> 
         return source, 0.9
 
     monkeypatch.setattr(tts, "_save_tts_segment", fake_save)
-    monkeypatch.setattr(tts, "_fit_edge_audio_to_slot", fake_fit)
+    monkeypatch.setattr(tts, "_fit_audio_to_slot", fake_fit)
     workspace = editor.patch_workspace(workspace, [{"id": "seg-0002", "text": "Ngắn."}], None)
 
     workspace = editor.regenerate_segment_audio(
@@ -373,7 +373,7 @@ def test_insert_segment_adds_an_unvoiced_cue_in_order(job_storage, monkeypatch) 
 
     monkeypatch.setattr(tts, "_save_tts_segment", fake_save)
     monkeypatch.setattr(tts, "_probe_duration", lambda path: 0.6)
-    monkeypatch.setattr(tts, "_fit_edge_audio_to_slot", lambda source, dest, slot: (source, 0.6))
+    monkeypatch.setattr(tts, "_fit_audio_to_slot", lambda source, dest, slot: (source, 0.6))
     workspace = editor.regenerate_segment_audio(
         workspace, new_id, voice="v", provider="edge", voice_rate="+0%", target_language="VI", voice_overrides=None
     )

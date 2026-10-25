@@ -262,3 +262,74 @@ def test_featured_community_voices_are_first_in_catalog(monkeypatch) -> None:
         "Thức Dậy Đi",
         "Giọng Khác",
     ]
+
+
+def test_removed_edge_settings_and_voices_migrate_to_zerotts(tmp_path: Path, monkeypatch) -> None:
+    settings_path = tmp_path / "runtime-settings.json"
+    settings_path.write_text(json.dumps({"tts_provider": "edge"}), encoding="utf-8")
+    monkeypatch.setenv("AETHER_RUNTIME_SETTINGS_PATH", str(settings_path))
+
+    assert get_runtime_settings().tts_provider == "zerotts"
+    assert resolve_effective_tts_runtime(get_runtime_settings()) == RUNTIME_ZEROTTS
+    assert canonical_voice_id("vi-VN-HoaiMyNeural") == "zerotts_maichi"
+    assert canonical_voice_id("vi-VN-NamMinhNeural") == "zerotts_giahuy"
+    assert tts._resolve_voice("vi-VN-HoaiMyNeural", "VI") == "zerotts_maichi"
+    assert tts._resolve_voice("Studio Narrator", "VI") == "zerotts_maichi"
+    migrated = migrate_configuration_document(
+        {"voice": {"voice_id": "vi-VN-NamMinhNeural", "provider": "edge"}}
+    )
+    assert migrated["voice"] == {"voice_id": "zerotts_giahuy", "provider": "auto"}
+    assert not any(voice.engine == "edge" for voice in list_voice_options())
+
+
+def test_engine_follows_voice_and_language() -> None:
+    clone = tts.VoiceOverrides(mode="clone", reference_audio_path="/tmp/ref.wav")
+
+    with tts.tts_provider_override("zerotts"):
+        assert tts._engine_for_voice("zerotts_giahuy", "EN") == "zerotts"
+        assert tts._engine_for_voice("anything", "VI") == "zerotts"
+        # ZeroTTS only speaks Vietnamese.
+        assert tts._engine_for_voice("anything", "EN") == "omnivoice"
+        assert tts._engine_for_voice("anything", "VI", clone) == "omnivoice"
+    with tts.tts_provider_override("omnivoice"):
+        assert tts._engine_for_voice("zerotts_maichi", "VI") == "zerotts"
+        assert tts._engine_for_voice("anything", "VI") == "omnivoice"
+
+
+def test_provider_dispatch_follows_voice(tmp_path: Path) -> None:
+    output = tmp_path / "voice.wav"
+
+    with (
+        patch("app.services.tts.synthesize_zerotts") as zerotts,
+        patch("app.services.tts._save_omnivoice_tts") as omnivoice,
+        tts.tts_provider_override("zerotts"),
+    ):
+        tts._save_provider_tts("Xin chào", "omnivoice_clone_01", output, "+0%")
+        tts._save_provider_tts("Xin chào", "unknown", output, "+0%")
+
+    omnivoice.assert_called_once()
+    zerotts.assert_called_once_with("Xin chào", "zerotts_maichi", output, "+0%")
+
+
+def test_model_dir_uses_local_int8_copy_and_drops_fp32_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AETHER_ZEROTTS_MODEL_DIR", raising=False)
+    monkeypatch.setattr(zerotts_tts, "_cache_dir", lambda: tmp_path)
+    old_fp32 = tmp_path / "models--zeroweight-ai--ZeroTTS"
+    old_fp32.mkdir()
+    for name in zerotts_tts._MODEL_REQUIRED_FILES:
+        path = tmp_path / "int8" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+
+    def no_download(**kwargs):
+        raise AssertionError("an existing int8 copy must not be downloaded again")
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", types.SimpleNamespace(snapshot_download=no_download)
+    )
+
+    assert zerotts_tts._model_dir() == tmp_path / "int8"
+    assert not old_fp32.exists()
+
+    monkeypatch.setenv("AETHER_ZEROTTS_MODEL_DIR", str(tmp_path / "custom"))
+    assert zerotts_tts._model_dir() == tmp_path / "custom"

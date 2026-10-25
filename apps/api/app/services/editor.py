@@ -533,7 +533,7 @@ def regenerate_segment_audio(
     else:
         next_start = segments[position + 1]["start"] if position + 1 < len(segments) else float("inf")
         slot = max(0.3, next_start - voice_start - 0.08) if next_start != float("inf") else float("inf")
-        fitted, duration = tts._fit_edge_audio_to_slot(raw, workdir / f"{label}.fit.mp3", slot)
+        fitted, duration = tts._fit_audio_to_slot(raw, workdir / f"{label}.fit.mp3", slot)
 
     # The new take voices only this cue's text: parts split off it need their own voice,
     # and the cue this one was split from still speaks this text too.

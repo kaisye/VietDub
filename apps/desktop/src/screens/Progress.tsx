@@ -62,7 +62,7 @@ const STEPS: PipelineStep[] = [
 /**
  * The engine/model actually serving each pipeline step, derived from the live
  * runtime config. STT prefers NVIDIA Riva when an NVIDIA key is configured,
- * else Groq; TTS reflects the effective runtime (local GPU / Colab / Edge).
+ * else Groq; TTS reflects the effective runtime (local GPU / Colab / ZeroTTS).
  */
 // A recovery detail means the runtime is reconnecting/restarting — NOT actually
 // producing output. Surfaced in a distinct (amber) style so the user can tell
@@ -89,7 +89,7 @@ function voiceNeedsOmniVoice(voiceId: string, profiles: VoiceProfile[]): boolean
   if (!voiceId || voiceId === "none") return false;
   const profile = profiles.find((p) => p.id === voiceId);
   if (!profile) return false;
-  if (profile.engine === "zerotts" || profile.engine === "edge") return false;
+  if (profile.engine === "zerotts") return false;
   if (profile.engine === "omnivoice") return true;
   if (profile.omnivoice_mode === "clone" || profile.omnivoice_mode === "design") return true;
   return !!(profile.reference_audio_url || profile.reference_audio_path);
@@ -138,19 +138,15 @@ function engineLabel(
       const profile = voiceProfiles.find((p) => p.id === job.voice);
       if (profile?.engine === "zerotts") return "ZeroTTS · CPU";
       const rt = options?.effective_tts_runtime;
-      // Clone/design voices are auto-promoted to OmniVoice by the backend even when
-      // the global tts_provider is "edge". Detect this case so the label stays honest.
-      const cloneVoice = voiceNeedsOmniVoice(job.voice, voiceProfiles);
+      // Clone/design voices and non-Vietnamese targets go to OmniVoice even when the
+      // global tts_provider is "zerotts" (ZeroTTS only speaks Vietnamese).
+      const omniVoice =
+        voiceNeedsOmniVoice(job.voice, voiceProfiles) ||
+        !(job.target_language || "VI").toUpperCase().startsWith("VI");
       if (rt === "omnivoice_local") return "OmniVoice GPU";
       if (rt === "omnivoice_colab") return "OmniVoice Colab";
-      if (cloneVoice) return "OmniVoice";
-      if (rt === "zerotts") return "ZeroTTS · CPU";
-      if (rt === "edge") return "Edge TTS";
-      return settings?.tts_provider === "zerotts"
-        ? "ZeroTTS · CPU"
-        : settings?.tts_provider === "omnivoice"
-        ? "OmniVoice"
-        : "Edge TTS";
+      if (omniVoice || settings?.tts_provider === "omnivoice") return "OmniVoice";
+      return "ZeroTTS · CPU";
     }
     case "rendering":
       return job.render_quality

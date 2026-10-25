@@ -164,11 +164,9 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
 
   const ttsRuntime = options.effective_tts_runtime ?? settings.tts_provider;
   const isOmniVoice = ttsRuntime === "omnivoice" || ttsRuntime.startsWith("omnivoice_");
-  const isZeroTTS = ttsRuntime === "zerotts";
-  // OmniVoice (GPU) and ZeroTTS (offline CPU) are fully working states; Edge is the
-  // always-available fallback default, hence "warn".
-  const ttsStatus: Status = isOmniVoice || isZeroTTS ? "ok" : "warn";
-  const ttsBadge = isOmniVoice ? "OmniVoice" : isZeroTTS ? "ZeroTTS" : "Edge TTS";
+  // OmniVoice (GPU) and ZeroTTS (offline CPU, the fallback) are both fully working states.
+  const ttsStatus: Status = "ok";
+  const ttsBadge = isOmniVoice ? "OmniVoice" : "ZeroTTS";
 
   const hasNvidiaKey = settings.nvidia_api_key_configured;
   // Translation runs through 9router or OpenRouter; NVIDIA NIM was removed as a translation backend.
@@ -216,13 +214,13 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
                 {isVI ? (
                   <>
                     Máy có <strong>{options.gpus[0]?.name}</strong>, nhưng PyTorch hiện là bản CPU nên CUDA chưa bật.{" "}
-                    <strong>Edge</strong> (giọng đám mây) vẫn dùng đầy đủ. Muốn chạy <strong>OmniVoice</strong> trên GPU,
+                    <strong>ZeroTTS</strong> (giọng Việt offline, CPU) vẫn dùng đầy đủ. Muốn chạy <strong>OmniVoice</strong> trên GPU,
                     cài đặt môi trường GPU (PyTorch bản CUDA) bằng nút bên dưới.
                   </>
                 ) : (
                   <>
                     This machine has <strong>{options.gpus[0]?.name}</strong>, but PyTorch is a CPU-only build so CUDA is off.{" "}
-                    <strong>Edge</strong> (cloud voices) still works fully. To run <strong>OmniVoice</strong> on the GPU,
+                    <strong>ZeroTTS</strong> (offline Vietnamese, CPU) still works fully. To run <strong>OmniVoice</strong> on the GPU,
                     set up the GPU environment (CUDA build of PyTorch) with the button below.
                   </>
                 )}
@@ -236,14 +234,14 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
           ) : isVI ? (
             <>
               Máy này chưa có GPU/CUDA — <strong>không sao cả</strong>. Bạn vẫn dùng được{" "}
-              <strong>Edge</strong> (giọng đám mây) hoặc <strong>ZeroTTS</strong> (giọng Việt local, CPU).
-              GPU chỉ cần cho <strong>OmniVoice</strong> (clone / voice design).
+              <strong>ZeroTTS</strong> (giọng Việt local, CPU). GPU chỉ cần cho <strong>OmniVoice</strong>{" "}
+              (clone / voice design / ngôn ngữ khác tiếng Việt).
             </>
           ) : (
             <>
               No GPU/CUDA on this machine — <strong>that's fine</strong>. You can still use{" "}
-              <strong>Edge</strong> (cloud voices) or <strong>ZeroTTS</strong> (local Vietnamese on CPU).
-              A GPU is only needed for <strong>OmniVoice</strong> (clone / voice design).
+              <strong>ZeroTTS</strong> (local Vietnamese on CPU). A GPU is only needed for{" "}
+              <strong>OmniVoice</strong> (clone / voice design / languages other than Vietnamese).
             </>
           )}
         </div>
@@ -317,8 +315,7 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
                 disabled={saving}
                 onChange={(e) => void applyPatch({ tts_provider: e.target.value })}
               >
-                <optgroup label={isVI ? "Edge TTS — chất lượng tương đối, không cần GPU" : "Edge TTS — decent quality, no GPU"}>
-                  <option value="edge">Edge TTS ({isVI ? "đám mây" : "cloud"})</option>
+                <optgroup label={isVI ? "ZeroTTS — giọng Việt offline, chạy trên CPU, không cần GPU" : "ZeroTTS — offline Vietnamese on the CPU, no GPU needed"}>
                   <option value="zerotts">ZeroTTS ({isVI ? "Việt chất lượng cao · CPU" : "high-quality Vietnamese · CPU"})</option>
                 </optgroup>
                 <optgroup label={isVI ? "OmniVoice — chất lượng cao, cho phép clone, GPU/Colab (cần setup)" : "OmniVoice — high quality, clone, GPU/Colab (needs setup)"}>
@@ -344,7 +341,7 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
                   status="ok"
                 />
               </>
-            ) : isZeroTTS ? (
+            ) : (
               <>
                 <Row
                   label={isVI ? "Tính năng" : "Features"}
@@ -355,19 +352,6 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
                   label={isVI ? "Yêu cầu" : "Requirements"}
                   value={isVI ? "Không cần GPU/key · tải model lần đầu" : "No GPU/key · downloads model on first use"}
                   status="ok"
-                />
-              </>
-            ) : (
-              <>
-                <Row
-                  label={isVI ? "Tính năng" : "Features"}
-                  value={isVI ? "Giọng Azure đa ngôn ngữ" : "Azure multilingual voices"}
-                  status="ok"
-                />
-                <Row
-                  label="OmniVoice"
-                  value={isVI ? "Chưa kích hoạt — cấu hình trong Settings" : "Not active — configure in Settings"}
-                  status="warn"
                 />
               </>
             )}

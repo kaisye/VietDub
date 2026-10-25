@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import contextvars
 import hashlib
@@ -25,7 +24,6 @@ from .speech_rate import SpeechRateProfile, speech_rate_duration_scale
 from .storage import ensure_storage
 from .subtitle import subtitle_to_plain_text
 from .zerotts_tts import ZEROTTS_PRESETS, is_zerotts_voice, synthesize_zerotts
-from .tts_runtime import RUNTIME_EDGE, resolve_effective_tts_runtime
 from .voice_options import canonical_voice_id, list_voice_options
 
 
@@ -36,26 +34,7 @@ _UUID_RE = re.compile(
 )
 
 
-VOICE_BY_LANGUAGE = {
-    "en": "en-US-JennyNeural",
-    "es": "es-ES-ElviraNeural",
-    "fr": "fr-FR-DeniseNeural",
-    "de": "de-DE-KatjaNeural",
-    "vi": "vi-VN-HoaiMyNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "ko": "ko-KR-SunHiNeural",
-    "zh": "zh-CN-XiaoxiaoNeural",
-}
-
-
-VOICE_ALIASES = {
-    "james deep": "en-US-GuyNeural",
-    "sarah adams": "en-US-JennyNeural",
-    "robert b.": "en-US-BrianNeural",
-}
-
-
-GENERIC_VOICES = {"", "studio narrator", "default", "auto"}
+DEFAULT_ZEROTTS_VOICE = ZEROTTS_PRESETS[0][0]
 _PROVIDER_OVERRIDE: contextvars.ContextVar[str] = contextvars.ContextVar(
     "aether_tts_provider_override",
     default="",
@@ -122,7 +101,7 @@ def _safe_tts_artifact_stem(path: Path) -> str:
 @contextmanager
 def tts_provider_override(provider: str | None):
     normalized = (provider or "").strip().lower()
-    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"edge", "omnivoice", "zerotts"} else "")
+    token = _PROVIDER_OVERRIDE.set(normalized if normalized in {"omnivoice", "zerotts"} else "")
     try:
         yield
     finally:
@@ -141,73 +120,17 @@ def generate_tts(
 ) -> Path:
     """Generate spoken audio from subtitle text and place each segment on the subtitle timeline."""
     root = ensure_storage()
-    if is_zerotts_voice(voice) and _tts_provider() != "zerotts":
-        logger.info("Voice '%s' is a ZeroTTS preset; routing to the ZeroTTS engine.", voice)
-        with tts_provider_override("zerotts"):
+    engine = _engine_for_voice(voice, target_language, voice_overrides)
+    if engine != _tts_provider():
+        logger.info("Voice '%s' is spoken by %s.", voice, engine)
+        with tts_provider_override(engine):
             return generate_tts(
                 text_or_subtitle, voice, target_language, voice_rate, speech_rate,
                 voice_overrides, speaker_voice_map, diarization_job_id,
             )
-    if _tts_provider() == "zerotts" and not is_zerotts_voice(voice):
-        if str(target_language or "").lower().startswith("vi") and ZEROTTS_PRESETS:
-            default_voice = ZEROTTS_PRESETS[0][0]
-            logger.info(
-                "ZeroTTS provider with non-preset voice '%s'; using default preset '%s'.",
-                voice,
-                default_voice,
-            )
-            return generate_tts(
-                text_or_subtitle, default_voice, target_language, voice_rate, speech_rate,
-                voice_overrides, speaker_voice_map, diarization_job_id,
-            )
-        logger.warning(
-            "ZeroTTS only speaks Vietnamese; falling back to Edge for language '%s'.",
-            target_language,
-        )
-        with tts_provider_override("edge"):
-            return generate_tts(
-                text_or_subtitle, voice, target_language, voice_rate, speech_rate,
-                voice_overrides, speaker_voice_map, diarization_job_id,
-            )
-    # Auto-promote to OmniVoice when the selected voice is a clone/design voice.
-    # Edge TTS has no concept of reference audio or voice cloning — forwarding a
-    # custom voice ID to it would silently substitute the language-default neural voice
-    # (e.g. "CDTeam" → "vi-VN-HoaiMyNeural"). Re-run inside an OmniVoice override so
-    # the user's explicit clone voice selection is always honoured.
-    if _tts_provider() == "edge" and not _PROVIDER_OVERRIDE.get():
-        if _voice_requires_omnivoice(voice, voice_overrides):
-            logger.info("Voice '%s' requires OmniVoice; auto-promoting from Edge TTS provider.", voice)
-            with tts_provider_override("omnivoice"):
-                return generate_tts(
-                    text_or_subtitle,
-                    voice,
-                    target_language,
-                    voice_rate,
-                    speech_rate,
-                    voice_overrides,
-                    speaker_voice_map,
-                    diarization_job_id,
-                )
-    # Prefer local GPU OmniVoice, then a configured Colab runtime, and finally the
-    # always-available default voice. When no OmniVoice runtime is reachable, run
-    # the whole job on Edge so general users still get a dub instead of a failure.
-    if (
-        _tts_provider() == "omnivoice"
-        and _tts_fallback_to_edge_enabled()
-        and resolve_effective_tts_runtime() == RUNTIME_EDGE
-    ):
-        logger.warning("No OmniVoice runtime is available; using the default voice for this job.")
-        with tts_provider_override("edge"):
-            return generate_tts(
-                text_or_subtitle,
-                voice,
-                target_language,
-                voice_rate,
-                speech_rate,
-                voice_overrides,
-                speaker_voice_map,
-                diarization_job_id,
-            )
+    if engine == "zerotts" and not is_zerotts_voice(voice):
+        logger.info("Voice '%s' is not a ZeroTTS voice; using the default ZeroTTS preset.", voice)
+        voice = DEFAULT_ZEROTTS_VOICE
     if speaker_voice_map and diarization_job_id:
         artifact_stem = _safe_tts_artifact_stem(text_or_subtitle)
         output = root / "audio" / f"{artifact_stem}.multivoice.mp3"
@@ -247,7 +170,7 @@ def generate_tts(
     selected_voice = _resolve_voice(voice, target_language)
     selected_rate = _normalize_rate(voice_rate)
     if _tts_provider() != "omnivoice":
-        selected_rate = _combine_edge_rate_with_speech_rate(selected_rate, speech_rate)
+        selected_rate = _combine_rate_with_speech_rate(selected_rate, speech_rate)
 
     cues = _parse_srt_cues(text_or_subtitle)
     if cues:
@@ -267,10 +190,7 @@ def generate_tts(
 
     output = root / "audio" / f"{_safe_tts_artifact_stem(text_or_subtitle)}.mp3"
     try:
-        if _tts_provider() == "zerotts":
-            _save_provider_tts(text, selected_voice, output, selected_rate)
-        else:
-            asyncio.run(_save_edge_tts(text, selected_voice, output, selected_rate))
+        _save_provider_tts(text, selected_voice, output, selected_rate, voice_overrides=voice_overrides)
     except Exception as exc:
         if os.getenv("AETHER_ALLOW_SYNTHETIC_AUDIO") == "1":
             return _create_synthetic_audio(output)
@@ -312,7 +232,7 @@ def generate_multivoice_cue_outputs(
         voice = _resolve_voice(str(assignment.get("voice") or ""), target_language)
         rate = _normalize_rate(str(assignment.get("voice_rate") or "+0%"))
         if provider != "omnivoice":
-            rate = _combine_edge_rate_with_speech_rate(rate, speech_rate)
+            rate = _combine_rate_with_speech_rate(rate, speech_rate)
         start = float(segment.get("start") or 0.0)
         end = float(segment.get("end") or start)
         text = str(segment.get("translated_text") or "").strip()
@@ -382,25 +302,7 @@ def _generate_chunked_tts(
     root = ensure_storage()
 
     if _should_send_srt_to_omnivoice():
-        try:
-            return _generate_omnivoice_srt_tts(subtitle_path, voice, rate, speech_rate, voice_overrides)
-        except Exception as exc:
-            if not _tts_fallback_to_edge_enabled():
-                raise
-            logger.warning(
-                "OmniVoice SRT endpoint failed (%s); falling back to the default voice.",
-                exc,
-            )
-            with tts_provider_override("edge"):
-                return _generate_chunked_tts(
-                    cues,
-                    subtitle_path,
-                    _edge_fallback_voice(voice),
-                    rate,
-                    target_language,
-                    speech_rate,
-                    voice_overrides,
-                )
+        return _generate_omnivoice_srt_tts(subtitle_path, voice, rate, speech_rate, voice_overrides)
 
     artifact_stem = _safe_tts_artifact_stem(subtitle_path)
     output = root / "audio" / f"{artifact_stem}.aligned.mp3"
@@ -416,18 +318,6 @@ def _generate_chunked_tts(
 
     if _tts_provider() == "zerotts":
         return _generate_local_timeline_tts(
-            semantic_cues,
-            voice,
-            rate,
-            workdir,
-            output,
-            speech_rate,
-            voice_overrides,
-            preserve_cue_boundaries=preserve_cue_boundaries,
-        )
-
-    if _tts_provider() == "edge" and _edge_timeline_fit_enabled():
-        return _generate_edge_timeline_tts(
             semantic_cues,
             voice,
             rate,
@@ -481,15 +371,14 @@ def _generate_local_timeline_tts(
 ) -> Path:
     """Synthesize local CPU TTS units sequentially and fit each to the SRT timeline.
 
-    Mirrors the Edge timeline path so local dubs stay in sync: each unit is voiced,
-    then time-compressed only if it would overrun the next cue, and overlaid on the
-    original timestamps. Local models share one in-process runtime, so units are
-    produced one at a time rather than via the async fan-out used for Edge.
+    Each unit is voiced, then time-compressed only if it would overrun the next
+    cue, and overlaid on the original timestamps so local dubs stay in sync. Local
+    models share one in-process runtime, so units are produced one at a time.
     """
     units = (
         _ordered_cues(semantic_cues)
         if preserve_cue_boundaries
-        else _edge_timeline_units(semantic_cues)
+        else _timeline_units(semantic_cues)
     )
     if not units:
         raise RuntimeError("No subtitle cues available for local timeline TTS.")
@@ -521,7 +410,7 @@ def _generate_local_timeline_tts(
             else float("inf")
         )
 
-        fitted_path, fitted_duration = _fit_edge_audio_to_slot(
+        fitted_path, fitted_duration = _fit_audio_to_slot(
             raw_segment,
             workdir / f"{index + 1:04d}_{provider}_fit.mp3",
             max_duration,
@@ -538,10 +427,6 @@ def _generate_local_timeline_tts(
     if not output.exists() or output.stat().st_size == 0:
         raise RuntimeError(f"{provider} returned an empty timeline audio file.")
     return output
-
-
-def _edge_timeline_fit_enabled() -> bool:
-    return _env_bool("AETHER_EDGE_TIMELINE_FIT", True)
 
 
 def _alignment_overrun_threshold() -> float:
@@ -579,125 +464,8 @@ def _flag_cue_overrun(
         file.write(line)
 
 
-def _generate_edge_timeline_tts(
-    semantic_cues: list[SubtitleCue],
-    voice: str,
-    rate: str,
-    workdir: Path,
-    output: Path,
-    speech_rate: SpeechRateProfile | None,
-    voice_overrides: VoiceOverrides | None,
-    *,
-    preserve_cue_boundaries: bool = False,
-) -> Path:
-    """Synthesize Edge TTS units in parallel and fit each to the timeline.
-
-    All units are synthesized concurrently in a single asyncio event loop
-    (bounded by AETHER_EDGE_CONCURRENCY, default 6), which cuts wall-clock
-    synthesis time from O(n × latency) down to O(n/concurrency × latency).
-    Tempo-fitting (ffmpeg) and the final mix run sequentially after synthesis.
-    """
-    units = (
-        _ordered_cues(semantic_cues)
-        if preserve_cue_boundaries
-        else _edge_timeline_units(semantic_cues)
-    )
-    if not units:
-        raise RuntimeError("No subtitle cues available for Edge timeline TTS.")
-
-    min_gap = _env_float("AETHER_EDGE_MIN_GAP_SECONDS", 0.08, minimum=0.0, maximum=2.0)
-    max_concurrent = _env_int("AETHER_EDGE_CONCURRENCY", 6, minimum=1, maximum=32)
-
-    raw_paths = asyncio.run(
-        _synthesize_edge_units_async(units, voice, rate, workdir, max_concurrent)
-    )
-
-    timed_segments: list[TimedAudioSegment] = []
-    manifest_chunks: list[TtsChunk] = []
-
-    for index, (unit, raw_segment) in enumerate(zip(units, raw_paths)):
-        next_start = units[index + 1].start if index + 1 < len(units) else float("inf")
-        max_duration = (
-            max(0.3, next_start - unit.start - min_gap)
-            if next_start != float("inf")
-            else float("inf")
-        )
-
-        fitted_path, fitted_duration = _fit_edge_audio_to_slot(
-            raw_segment,
-            workdir / f"{index + 1:04d}_edge_fit.mp3",
-            max_duration,
-        )
-        end = unit.start + fitted_duration
-        _flag_cue_overrun(workdir, f"{index + 1:04d}_edge", unit, fitted_duration, next_start)
-        timed_segments.append(TimedAudioSegment(path=fitted_path, start=unit.start, end=end))
-        manifest_chunks.append(TtsChunk(start=unit.start, end=end, cues=[unit]))
-
-    timeline_duration = max((segment.end for segment in timed_segments), default=0.0)
-    _mix_timed_audio(timed_segments, output, workdir / "timeline_filter.txt", timeline_duration)
-    _write_chunk_manifest(output, manifest_chunks, timed_segments, speech_rate)
-
-    if not output.exists() or output.stat().st_size == 0:
-        raise RuntimeError("TTS provider returned an empty Edge timeline audio file.")
-    return output
-
-
-async def _synthesize_edge_units_async(
-    units: list[SubtitleCue],
-    voice: str,
-    rate: str,
-    workdir: Path,
-    max_concurrent: int,
-) -> list[Path]:
-    """Synthesize all Edge TTS units concurrently and return their raw audio paths."""
-    import edge_tts
-
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def synth_one(unit: SubtitleCue, position: int) -> Path:
-        raw = workdir / f"{position:04d}_edge_raw.mp3"
-        cleaned = _sanitize_tts_text(unit.text)
-        target_duration = max(0.25, unit.end - unit.start)
-        silence_secs = target_duration
-
-        if not _has_speakable_content(cleaned):
-            _create_silence(raw, silence_secs)
-            return raw
-
-        last_exc: Exception | None = None
-        async with semaphore:
-            for attempt in range(3):
-                try:
-                    communicate = edge_tts.Communicate(cleaned, voice=voice, rate=rate)
-                    await communicate.save(str(raw))
-                    if raw.exists() and raw.stat().st_size > 0:
-                        return raw
-                    raise RuntimeError("No audio was received.")
-                except Exception as exc:
-                    last_exc = exc
-                    raw.unlink(missing_ok=True)
-                    if attempt < 2:
-                        await asyncio.sleep(0.8 * (attempt + 1))
-
-        if _is_edge_no_audio_error(last_exc):
-            logger.warning(
-                "Edge TTS returned no audio for cue %d (text: %r); substituting silence.",
-                position,
-                cleaned[:80],
-            )
-            _create_silence(raw, silence_secs)
-            return raw
-        raise RuntimeError(
-            f"TTS generation failed for voice '{voice}' on cue {position}: {last_exc}"
-        ) from last_exc
-
-    return list(
-        await asyncio.gather(*[synth_one(unit, i + 1) for i, unit in enumerate(units)])
-    )
-
-
-def _edge_timeline_units(cues: list[SubtitleCue]) -> list[SubtitleCue]:
-    """Group sentence cues into compact, timeline-anchored units for Edge synthesis."""
+def _timeline_units(cues: list[SubtitleCue]) -> list[SubtitleCue]:
+    """Group sentence cues into compact, timeline-anchored units for synthesis."""
     cues = [cue for cue in _ordered_cues(cues) if cue.text and cue.end > cue.start]
     if not cues:
         return []
@@ -715,13 +483,13 @@ def _edge_timeline_units(cues: list[SubtitleCue]) -> list[SubtitleCue]:
         if gap <= max_gap and projected_duration <= max_duration and len(projected_text) <= max_chars:
             group.append(cue)
             continue
-        units.append(_merge_edge_unit(group))
+        units.append(_merge_timeline_unit(group))
         group = [cue]
-    units.append(_merge_edge_unit(group))
+    units.append(_merge_timeline_unit(group))
     return units
 
 
-def _merge_edge_unit(group: list[SubtitleCue]) -> SubtitleCue:
+def _merge_timeline_unit(group: list[SubtitleCue]) -> SubtitleCue:
     return SubtitleCue(
         start=group[0].start,
         end=group[-1].end,
@@ -729,11 +497,11 @@ def _merge_edge_unit(group: list[SubtitleCue]) -> SubtitleCue:
     )
 
 
-def _fit_edge_audio_to_slot(source: Path, dest: Path, max_duration: float) -> tuple[Path, float]:
-    """Time-compress an Edge segment only when it would overrun the next cue.
+def _fit_audio_to_slot(source: Path, dest: Path, max_duration: float) -> tuple[Path, float]:
+    """Time-compress a voiced segment only when it would overrun the next cue.
 
     Returns the audio path to place on the timeline and its (possibly fitted) duration.
-    Speech that already ends before the next cue keeps Edge's natural speed; only
+    Speech that already ends before the next cue keeps its natural speed; only
     overflowing speech is sped up (capped) so words are preserved instead of cut.
     """
     measured = _probe_duration(source)
@@ -1923,13 +1691,6 @@ def _create_sentence_distributed_audio(
     return parts
 
 
-async def _save_edge_tts(text: str, voice: str, output: Path, rate: str) -> None:
-    import edge_tts
-
-    communicate = edge_tts.Communicate(text, voice=voice, rate=rate)
-    await communicate.save(str(output))
-
-
 def _save_tts_segment(
     text: str,
     voice: str,
@@ -1951,18 +1712,7 @@ def _save_tts_segment(
     try:
         _save_tts_with_retries(cleaned, voice, output, rate, target_duration, voice_overrides)
         return output
-    except Exception as initial_exc:
-        if _is_edge_no_audio_error(initial_exc):
-            # edge-tts accepted the connection but returned no audio chunks.
-            # This happens for very short text, certain Unicode characters, or
-            # transient rate-limiting where every retry returns the same empty
-            # response.  Emit silence so the rest of the dub continues.
-            logger.warning(
-                "Edge TTS returned no audio for cue '%s' (text: %r); substituting silence.",
-                label,
-                cleaned[:80],
-            )
-            return _create_silence(output, silence_duration)
+    except Exception:
         fragments = _split_tts_text(cleaned)
         if len(fragments) <= 1:
             raise
@@ -1974,19 +1724,7 @@ def _save_tts_segment(
         fragment_duration = None
         if target_duration:
             fragment_duration = max(0.25, target_duration * _word_count(fragment) / total_weight)
-        try:
-            _save_tts_with_retries(fragment, voice, part, rate, fragment_duration, voice_overrides)
-        except Exception as frag_exc:
-            if _is_edge_no_audio_error(frag_exc):
-                logger.warning(
-                    "Edge TTS returned no audio for fragment %d of cue '%s' (text: %r); substituting silence.",
-                    index,
-                    label,
-                    fragment[:80],
-                )
-                _create_silence(part, fragment_duration or silence_duration)
-            else:
-                raise
+        _save_tts_with_retries(fragment, voice, part, rate, fragment_duration, voice_overrides)
         parts.append(part)
     _concat_audio(parts, output, workdir / f"{label}_split_concat.txt")
     return output
@@ -2022,54 +1760,13 @@ def _save_provider_tts(
     target_duration: float | None = None,
     voice_overrides: VoiceOverrides | None = None,
 ) -> None:
-    provider = _tts_provider()
-    if provider == "zerotts":
-        synthesize_zerotts(text, voice, output, rate)
+    # The voice decides the engine, so one timeline can mix ZeroTTS and OmniVoice speakers.
+    if is_zerotts_voice(voice) or (
+        _tts_provider() == "zerotts" and not _voice_requires_omnivoice(voice, voice_overrides)
+    ):
+        synthesize_zerotts(text, voice if is_zerotts_voice(voice) else DEFAULT_ZEROTTS_VOICE, output, rate)
         return
-    if provider == "omnivoice":
-        try:
-            _save_omnivoice_tts(text, voice, output, rate, voice_overrides)
-            return
-        except Exception as exc:
-            if not _tts_fallback_to_edge_enabled():
-                raise
-            output.unlink(missing_ok=True)
-            fallback_voice = _edge_fallback_voice(voice)
-            logger.warning(
-                "OmniVoice synthesis failed (%s); falling back to default voice '%s'.",
-                exc,
-                fallback_voice,
-            )
-            asyncio.run(_save_edge_tts(text, fallback_voice, output, rate))
-            return
-    asyncio.run(_save_edge_tts(text, voice, output, rate))
-
-
-def _tts_fallback_to_edge_enabled() -> bool:
-    # Disabled by default: when a user explicitly selects an OmniVoice/clone voice
-    # (e.g. "CDTeam"), silently substituting a generic Edge voice (e.g. HoaiMy)
-    # produces a render with the wrong voice. Honour the selected voice — attempt
-    # to bring up the OmniVoice runtime and otherwise fail loudly. Set
-    # AETHER_TTS_FALLBACK_TO_EDGE=1 to opt back into the resilient substitution.
-    return _env_bool("AETHER_TTS_FALLBACK_TO_EDGE", False)
-
-
-def _edge_fallback_voice(voice: str) -> str:
-    """Pick a usable Edge voice when OmniVoice is unavailable.
-
-    The incoming ``voice`` may be an OmniVoice voice-option id that Edge cannot
-    speak, so resolve to a language-appropriate neural voice, defaulting to
-    Vietnamese (the app's primary target language).
-    """
-    normalized = (voice or "").strip()
-    if normalized.endswith("Neural") and "-" in normalized:
-        return normalized
-    option = _find_voice_option(normalized)
-    if option is not None:
-        language_key = (getattr(option, "locale", "") or "").split("-")[0].lower()
-        if language_key in VOICE_BY_LANGUAGE:
-            return VOICE_BY_LANGUAGE[language_key]
-    return VOICE_BY_LANGUAGE.get("vi", VOICE_BY_LANGUAGE["en"])
+    _save_omnivoice_tts(text, voice, output, rate, voice_overrides)
 
 
 def _nvidia_api_key() -> str | None:
@@ -2340,7 +2037,7 @@ def _voice_instruction(
     return voice if mode == "design" else ""
 
 
-def _combine_edge_rate_with_speech_rate(rate: str, speech_rate: SpeechRateProfile | None) -> str:
+def _combine_rate_with_speech_rate(rate: str, speech_rate: SpeechRateProfile | None) -> str:
     scale = speech_rate_duration_scale(speech_rate)
     if scale == 1.0:
         return rate
@@ -2519,23 +2216,10 @@ def _sanitize_tts_text(text: str) -> str:
 def _has_speakable_content(text: str) -> bool:
     """True if the text has anything a TTS engine can voice (letters or digits).
 
-    Edge TTS returns "No audio was received" for whitespace/punctuation/emoji-only
-    input. Such cues carry no speech, so the timeline should get silence for that
-    slot instead of failing the whole dub.
+    Whitespace/punctuation/emoji-only cues carry no speech, so the timeline gets
+    silence for that slot instead of failing the whole dub.
     """
     return any(char.isalnum() for char in text)
-
-
-def _is_edge_no_audio_error(exc: BaseException) -> bool:
-    """True when edge-tts refused to produce audio for the given text.
-
-    Distinguished from transient network/connection failures so we can emit
-    silence for the cue rather than failing the entire dub.  The check is
-    intentionally broad (substring match) because edge-tts surfaces the same
-    root cause through both its own ``NoAudioReceived`` exception and our
-    empty-file ``RuntimeError``.
-    """
-    return "no audio was received" in str(exc).lower()
 
 
 def _split_tts_text(text: str, max_chars: int = 90) -> list[str]:
@@ -2589,42 +2273,40 @@ def _split_tts_text(text: str, max_chars: int = 90) -> list[str]:
 
 
 def _resolve_voice(voice: str, target_language: str) -> str:
+    """Return the voice-option id to speak with.
+
+    Unknown or generic names get the default ZeroTTS preset for Vietnamese. Other
+    languages keep the name, and OmniVoice picks a voice itself (auto mode).
+    """
     normalized = (voice or "").strip()
-    option = _find_voice_option(normalized)
-    if option:
-        # Edge TTS only accepts Microsoft Neural voice IDs (e.g. "vi-VN-HoaiMyNeural").
-        # OmniVoice-specific IDs (e.g. "CDTeam") must not be forwarded to Edge TTS.
-        is_neural_id = normalized.endswith("Neural") and "-" in normalized
-        if is_neural_id or _tts_provider() in {"omnivoice", "zerotts"}:
-            return normalized
-        # Provider is Edge — map via the voice option's locale to the nearest neural voice.
-        locale_key = (option.locale or "").split("-")[0].lower()
-        lang_key = locale_key or (target_language or "en").split("-")[0].lower()
-        return VOICE_BY_LANGUAGE.get(lang_key, VOICE_BY_LANGUAGE.get(
-            (target_language or "en").split("-")[0].lower(), VOICE_BY_LANGUAGE["en"]
-        ))
-    matched_option = next(
+    option = _find_voice_option(normalized) or next(
         (o for o in list_voice_options() if o.name.strip().casefold() == normalized.casefold()),
         None,
     )
-    if matched_option:
-        is_neural_id = matched_option.id.endswith("Neural") and "-" in matched_option.id
-        if is_neural_id or _tts_provider() in {"omnivoice", "zerotts"}:
-            return matched_option.id
-        locale_key = (matched_option.locale or "").split("-")[0].lower()
-        lang_key = locale_key or (target_language or "en").split("-")[0].lower()
-        return VOICE_BY_LANGUAGE.get(lang_key, VOICE_BY_LANGUAGE.get(
-            (target_language or "en").split("-")[0].lower(), VOICE_BY_LANGUAGE["en"]
-        ))
-    if normalized.endswith("Neural") and "-" in normalized:
-        return normalized
-    language_key = (target_language or "en").split("-")[0].lower()
-    if normalized.lower() in GENERIC_VOICES:
-        return VOICE_BY_LANGUAGE.get(language_key, VOICE_BY_LANGUAGE["en"])
-    alias = VOICE_ALIASES.get(normalized.lower())
-    if alias:
-        return alias
-    return VOICE_BY_LANGUAGE.get(language_key, VOICE_BY_LANGUAGE["en"])
+    if option:
+        return option.id
+    if _is_vietnamese(target_language):
+        return DEFAULT_ZEROTTS_VOICE
+    return normalized
+
+
+def _is_vietnamese(target_language: str | None) -> bool:
+    return str(target_language or "").strip().lower().startswith("vi")
+
+
+def _engine_for_voice(voice: str, target_language: str, voice_overrides: VoiceOverrides | None = None) -> str:
+    """Pick the engine that speaks ``voice``: ``zerotts`` or ``omnivoice``.
+
+    ZeroTTS presets and clone/design voices name their engine. Any other voice uses
+    the configured provider, except that ZeroTTS only speaks Vietnamese.
+    """
+    if is_zerotts_voice(canonical_voice_id(voice)):
+        return "zerotts"
+    if _voice_requires_omnivoice(voice, voice_overrides):
+        return "omnivoice"
+    if _tts_provider() == "omnivoice" or not _is_vietnamese(target_language):
+        return "omnivoice"
+    return "zerotts"
 
 
 def _normalize_rate(rate: str | None) -> str:
@@ -2703,16 +2385,14 @@ def _group_cues_for_tts(cues: list[SubtitleCue]) -> list[SubtitleCue]:
 
 
 def _tts_provider() -> str:
-    return _PROVIDER_OVERRIDE.get() or get_runtime_settings().tts_provider or "edge"
+    return _PROVIDER_OVERRIDE.get() or get_runtime_settings().tts_provider or "zerotts"
 
 
 def _voice_requires_omnivoice(voice_id: str, voice_overrides: VoiceOverrides | None = None) -> bool:
     """Return True when the voice can only be synthesised by OmniVoice.
 
-    Standard Edge TTS Neural IDs (e.g. "vi-VN-HoaiMyNeural") work with both engines.
-    Clone / design voices that carry reference audio or an explicit omnivoice_mode need
-    OmniVoice — Edge TTS cannot handle them and would silently fall back to the
-    language-default neural voice.
+    Clone / design voices carry reference audio or an explicit omnivoice_mode;
+    ZeroTTS cannot speak them.
     """
     if voice_overrides and (
         voice_overrides.reference_audio_url

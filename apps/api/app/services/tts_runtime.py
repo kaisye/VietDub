@@ -1,8 +1,8 @@
 """Resolve which TTS runtime should serve a job.
 
 The simplified desktop app prioritises a local NVIDIA GPU running OmniVoice, then
-a configured Colab/remote OmniVoice runtime, and finally the always-available
-Edge default voice. Detection callables are injectable so the resolver stays
+a configured Colab/remote OmniVoice runtime, and finally the offline ZeroTTS
+voices that run on any CPU. Detection callables are injectable so the resolver stays
 unit-testable without real hardware or network access.
 """
 
@@ -15,7 +15,6 @@ from .runtime_settings import RuntimeSettings, get_runtime_settings
 
 RUNTIME_OMNIVOICE_LOCAL = "omnivoice_local"
 RUNTIME_OMNIVOICE_COLAB = "omnivoice_colab"
-RUNTIME_EDGE = "edge"
 RUNTIME_ZEROTTS = "zerotts"
 
 
@@ -54,19 +53,17 @@ def resolve_effective_tts_runtime(
     local_ready: Callable[[RuntimeSettings], bool] | None = None,
     colab_ready: Callable[[], bool] | None = None,
 ) -> str:
-    """Return one of ``omnivoice_local`` / ``omnivoice_colab`` / ``edge``.
+    """Return one of ``omnivoice_local`` / ``omnivoice_colab`` / ``zerotts``.
 
     Order honours ``prefer_local_gpu``: when set (the default), a reachable local
     GPU OmniVoice wins, otherwise a reachable Colab runtime is tried first. If no
-    OmniVoice runtime is available the default Edge voice is used.
+    OmniVoice runtime is available the offline ZeroTTS voices are used.
     """
     settings = settings or get_runtime_settings()
 
-    # Non-OmniVoice providers don't probe GPU/Colab.
-    if settings.tts_provider == "zerotts":
-        return RUNTIME_ZEROTTS
+    # ZeroTTS doesn't probe GPU/Colab.
     if settings.tts_provider != "omnivoice":
-        return RUNTIME_EDGE
+        return RUNTIME_ZEROTTS
 
     gpu_available = gpu_available or _local_gpu_available
     local_ready = local_ready or _local_omnivoice_ready
@@ -86,4 +83,4 @@ def resolve_effective_tts_runtime(
                 return runtime
         except Exception:
             continue
-    return RUNTIME_EDGE
+    return RUNTIME_ZEROTTS

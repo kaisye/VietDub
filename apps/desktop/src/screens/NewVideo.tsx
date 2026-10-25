@@ -853,17 +853,14 @@ function VoiceDesignBuilder({
   );
 }
 
-// Engine grouping for the voice grid. ZeroTTS gets its own section because its
-// first-use download and quality/performance profile differ from the light voices.
-type VoiceGroupKey = "edge" | "zerotts" | "omnivoice";
+// Engine grouping for the voice grid: offline ZeroTTS (CPU) and OmniVoice (GPU).
+type VoiceGroupKey = "zerotts" | "omnivoice";
 
 function voiceGroupKey(voice: VoiceProfile): VoiceGroupKey {
-  if (voice.engine === "zerotts") return "zerotts";
-  return voice.engine === "edge" ? "edge" : "omnivoice";
+  return voice.engine === "zerotts" ? "zerotts" : "omnivoice";
 }
 
 const VOICE_GROUP_ACCENT: Record<VoiceGroupKey, { accent: string; soft: string; ink: string }> = {
-  edge: { accent: "var(--info)", soft: "var(--info-soft)", ink: "var(--info)" },
   zerotts: { accent: "var(--success)", soft: "var(--success-soft)", ink: "var(--success)" },
   omnivoice: { accent: "var(--primary)", soft: "var(--primary-soft)", ink: "var(--primary-ink)" },
 };
@@ -899,7 +896,6 @@ function VoicePicker({
   }
 
   const noneVoice = voices.find((item) => item.id === "none");
-  const edgeVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "edge");
   const zeroVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "zerotts");
   const omniVoices = voices.filter((item) => item.id !== "none" && voiceGroupKey(item) === "omnivoice");
 
@@ -975,13 +971,6 @@ function VoicePicker({
 
   return (
     <div className="space-y-4">
-      {edgeVoices.length ? (
-        <div className="space-y-2">
-          {renderGroupHeader("edge", t.voice_group_edge_title, t.voice_group_edge_note)}
-          <div className={VOICE_GRID_COLS}>{edgeVoices.map((voice) => renderCard(voice, "edge"))}</div>
-        </div>
-      ) : null}
-
       {zeroVoices.length ? (
         <div className="space-y-2">
           {renderGroupHeader("zerotts", t.voice_group_zerotts_title, t.voice_group_zerotts_note)}

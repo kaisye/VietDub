@@ -274,7 +274,7 @@ def rerender_job_with_voice(
 
 
 def _apply_voice_to_job(job: MediaJob, voice: VoiceOption) -> None:
-    provider = voice.engine if voice.engine in {"edge", "omnivoice", "zerotts"} else "auto"
+    provider = voice.engine if voice.engine in {"omnivoice", "zerotts"} else "auto"
     mode = voice.omnivoice_mode if voice.omnivoice_mode in {"auto", "design", "clone"} else ""
     snapshot = asdict(voice)
 

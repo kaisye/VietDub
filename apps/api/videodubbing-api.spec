@@ -53,13 +53,12 @@ hiddenimports += [
     "watchfiles",
 ]
 
-# Third-party packages imported lazily (edge_tts, gradio_client, yt_dlp, riva,
+# Third-party packages imported lazily (gradio_client, yt_dlp, riva,
 # plus the hard-subtitle OCR stack). collect_all grabs submodules, data files
 # and bundled binaries/protos. onnxruntime ships native .dll/.so providers and
 # cv2 (opencv) ships native libs — both are imported lazily inside
 # hardsub_ocr.py and must be collected explicitly or the frozen OCR path fails.
 for pkg in (
-    "edge_tts",
     "gradio_client",
     "yt_dlp",
     "riva",

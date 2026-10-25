@@ -10,7 +10,7 @@ from .storage import ensure_storage
 from .voice_options import canonical_voice_id, list_voice_options
 
 
-DEFAULT_VOICE_ID = "vi-VN-HoaiMyNeural"
+DEFAULT_VOICE_ID = "zerotts_maichi"
 
 
 @dataclass

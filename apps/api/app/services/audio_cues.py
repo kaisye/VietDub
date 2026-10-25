@@ -90,7 +90,7 @@ def create_audio_cue_manifest(
         )
 
     if tts._tts_provider() != "omnivoice":
-        selected_rate = tts._combine_edge_rate_with_speech_rate(selected_rate, speech_rate)
+        selected_rate = tts._combine_rate_with_speech_rate(selected_rate, speech_rate)
 
     cues = tts._parse_srt_cues(translated_subtitle_path)
     if not cues:

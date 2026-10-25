@@ -70,7 +70,7 @@ on Windows).
 - **FFmpeg is not bundled.** It must be on PATH at runtime. Bundling it as an
   additional `externalBin`/resource is a possible follow-up.
 - OmniVoice local/Colab runtimes run out-of-process and are intentionally
-  excluded from the frozen backend (it falls back to Edge TTS when neither is
-  available).
+  excluded from the frozen backend (Vietnamese jobs fall back to the offline
+  ZeroTTS voices when neither is available).
 - The frozen backend keeps all mutable state under `AETHER_DATA_DIR`, never in
   the install directory.

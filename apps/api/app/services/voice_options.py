@@ -29,6 +29,9 @@ LEGACY_BUNDLED_VOICE_IDS = {
     "nghitts_minhquang": "zerotts_quangminh",
     "nghitts_thanhphuong": "zerotts_baotrang",
     "nghitts_adam": "zerotts_tiendat",
+    # Removed Edge TTS voices migrate to the matching ZeroTTS voice.
+    "vi-VN-HoaiMyNeural": "zerotts_maichi",
+    "vi-VN-NamMinhNeural": "zerotts_giahuy",
 }
 
 
@@ -46,8 +49,8 @@ class VoiceOption:
     reference_text: str = ""
     reference_text_path: str = ""
     instruction: str = ""
-    # Which TTS engine speaks this voice: "" / "edge" (Microsoft neural, default),
-    # "omnivoice" (clone/design on GPU) or "zerotts" (offline CPU ONNX).
+    # Which TTS engine speaks this voice: "zerotts" (offline CPU ONNX) or
+    # "omnivoice" (clone/design on GPU).
     engine: str = ""
     removable: bool = False
 
@@ -137,24 +140,6 @@ DEFAULT_VOICE_OPTIONS: list[VoiceOption] = [
         "None",
         "Disabled",
         "Keep source audio without generating a dubbed voice.",
-    ),
-    VoiceOption(
-        "vi-VN-HoaiMyNeural",
-        "Hoai My",
-        "vi-VN",
-        "Vietnamese",
-        "Narration",
-        "Vietnamese female narration voice for localized videos.",
-        engine="edge",
-    ),
-    VoiceOption(
-        "vi-VN-NamMinhNeural",
-        "Nam Minh",
-        "vi-VN",
-        "Vietnamese",
-        "Narration",
-        "Vietnamese male narration voice for localized videos.",
-        engine="edge",
     ),
     *_ZEROTTS_VOICE_OPTIONS,
     *_bundled_omnivoice_options(),

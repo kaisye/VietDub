@@ -98,7 +98,7 @@ export function createDefaultDraft(mode: CreateMode = "quick_video"): CreateDraf
     },
     languages: { source: "auto", target: "VI" },
     voice: {
-      voice_id: "vi-VN-HoaiMyNeural",
+      voice_id: "zerotts_maichi",
       rate: 0,
       instruction: "",
     },

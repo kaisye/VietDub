@@ -7,9 +7,8 @@ httpx==0.28.1
 cryptography>=45.0.0
 python-dotenv>=1.1.0
 yt-dlp>=2025.12.8
-edge-tts>=7.2.3
-# High-quality Vietnamese TTS on CPU via ONNX. Weights (~900 MB) and the eight
-# official voice packs are downloaded from Hugging Face on first use.
+# High-quality Vietnamese TTS on CPU via ONNX. VietDub's int8 weights (~254 MB)
+# and the eight official voice packs are downloaded from Hugging Face on first use.
 zerotts>=0.1.5,<0.2
 # Hard-subtitle OCR (CPU): runs the PP-OCR detection/recognition models via
 # ONNXRuntime with models bundled in the wheel — no paddlepaddle, no runtime

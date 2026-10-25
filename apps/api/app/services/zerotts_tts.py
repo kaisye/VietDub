@@ -1,7 +1,8 @@
 """ZeroTTS: local CPU Vietnamese TTS using the official ONNX runtime.
 
-The model and its eight bundled voice packs are downloaded from Hugging Face on
-first use and cached under VietDub's storage directory.  Synthesis is serialized
+VietDub ships the int8-quantized graphs (~254 MB, about 1.7x faster than fp32 on
+CPU). The model and its eight bundled voice packs are downloaded from Hugging
+Face on first use into VietDub's storage directory.  Synthesis is serialized
 because the ZeroTTS runtime keeps mutable ONNX/codec state per model instance.
 """
 
@@ -29,7 +30,28 @@ from .storage import ensure_storage
 
 logger = logging.getLogger(__name__)
 
-ZEROTTS_MODEL_ID = "zeroweight-ai/ZeroTTS"
+# int8 export of zeroweight-ai/ZeroTTS (MIT); same layout as the upstream repo.
+ZEROTTS_MODEL_ID = os.getenv("AETHER_ZEROTTS_REPO", "").strip() or "kaisye/ZeroTTS-int8"
+_MODEL_ALLOW_PATTERNS = [
+    "config.json",
+    "tokenizer.json",
+    "null_voice_emb.npy",
+    "silence_frame.npy",
+    "onnx/*",
+    "onnx/codec/*",
+    "voices/index.json",
+    "voices/*/voice.npz",
+    "voices/*/meta.json",
+    "voices/*/preview.wav",
+]
+_MODEL_REQUIRED_FILES = (
+    "config.json",
+    "tokenizer.json",
+    "null_voice_emb.npy",
+    "onnx/text_encoder.onnx",
+    "onnx/prefix_step.onnx",
+    "onnx/local_frame_decode.onnx",
+)
 
 # (VietDub id, upstream voice-pack id, display name, short description).
 ZEROTTS_PRESETS: list[tuple[str, str, str, str]] = [
@@ -404,6 +426,34 @@ def _cache_dir() -> Path:
     return path
 
 
+def _model_dir() -> Path:
+    """Local copy of the int8 model, downloaded from ZEROTTS_MODEL_ID on first use.
+
+    AETHER_ZEROTTS_MODEL_DIR points at an existing model folder instead (dev/offline).
+    """
+    override = os.getenv("AETHER_ZEROTTS_MODEL_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    cache = _cache_dir()
+    # Older releases cached the ~860 MB fp32 model here; it is no longer used.
+    shutil.rmtree(cache / "models--zeroweight-ai--ZeroTTS", ignore_errors=True)
+    target = cache / "int8"
+    if all((target / name).is_file() for name in _MODEL_REQUIRED_FILES):
+        return target
+    from huggingface_hub import snapshot_download
+
+    logger.info("Downloading ZeroTTS int8 model from %s…", ZEROTTS_MODEL_ID)
+    snapshot_download(
+        repo_id=ZEROTTS_MODEL_ID,
+        local_dir=str(target),
+        allow_patterns=_MODEL_ALLOW_PATTERNS,
+    )
+    missing = [name for name in _MODEL_REQUIRED_FILES if not (target / name).is_file()]
+    if missing:
+        raise RuntimeError(f"ZeroTTS model download from {ZEROTTS_MODEL_ID} is missing {missing}.")
+    return target
+
+
 def _thread_count() -> int:
     configured = os.getenv("AETHER_ZEROTTS_THREADS", "").strip()
     if configured:
@@ -434,12 +484,9 @@ def _load_model():
             raise RuntimeError(
                 "ZeroTTS is not installed. Install it with `pip install zerotts`."
             ) from exc
-        logger.info("Loading ZeroTTS from %s (CPU / ONNX)…", ZEROTTS_MODEL_ID)
-        _MODEL = ZeroTTS.from_pretrained(
-            ZEROTTS_MODEL_ID,
-            cache_dir=str(_cache_dir()),
-            intra_op_num_threads=_thread_count(),
-        )
+        model_dir = _model_dir()
+        logger.info("Loading ZeroTTS int8 from %s (CPU / ONNX)…", model_dir)
+        _MODEL = ZeroTTS.from_pretrained(model_dir, intra_op_num_threads=_thread_count())
         return _MODEL
 
 

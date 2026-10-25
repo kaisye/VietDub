@@ -78,9 +78,8 @@ API key chỉ được lưu trong thư mục dữ liệu người dùng. Không 
 
 ### Giọng đọc
 
-- **Edge TTS**: dùng ngay, không cần GPU hay model cục bộ.
 - **ZeroTTS**: 8 giọng Việt tích hợp và thư viện giọng community chạy local bằng
-  ONNX/CPU; tải khoảng 900 MB model ở lần dùng đầu, sau đó có thể chạy offline.
+  ONNX/CPU (bản int8); tải khoảng 254 MB model ở lần dùng đầu, sau đó có thể chạy offline.
   Trong **Giọng đọc → Thư viện giọng**, VietDub hiển thị trực tiếp danh sách
   community từ ZeroWeight để nghe thử và cài bằng một nút. Gói `.zip` tải ngoài
   vẫn có thể nhập thủ công. Giọng được lưu trong app-data và xuất hiện ngay ở
@@ -240,7 +239,7 @@ xóa `storage` nếu muốn giữ job.
 ### Model tải chậm hoặc hết dung lượng
 
 OmniVoice và PyTorch không nằm trong installer. Đảm bảo ổ đĩa còn trống
-và không đóng app trong lần tải đầu. Edge TTS là lựa chọn nhẹ để kiểm tra nhanh.
+và không đóng app trong lần tải đầu. ZeroTTS là lựa chọn nhẹ để kiểm tra nhanh.
 
 ### Render còn giọng gốc
 

@@ -62,7 +62,8 @@ class VoiceReferenceSnapshot(ConfigurationModel):
 
 
 class VoiceConfiguration(ConfigurationModel):
-    voice_id: str = Field(default="vi-VN-HoaiMyNeural", min_length=1, max_length=160)
+    voice_id: str = Field(default="zerotts_maichi", min_length=1, max_length=160)
+    # "edge" only appears in snapshots saved before Edge TTS was removed; it acts as "auto".
     provider: Literal["auto", "edge", "omnivoice", "zerotts"] = "auto"
     mode: Literal["", "auto", "design", "clone"] = ""
     rate: int = Field(default=0, ge=-100, le=100)
@@ -207,6 +208,9 @@ def migrate_configuration_document(configuration: dict[str, Any]) -> dict[str, A
         voice["voice_id"] = canonical_voice_id(str(voice["voice_id"]))
         if voice.get("provider") == "nghitts":
             voice["provider"] = "zerotts"
+        elif voice.get("provider") == "edge":
+            # Edge TTS was removed; its voices now map to ZeroTTS voices.
+            voice["provider"] = "auto"
     speakers = migrated.get("speakers")
     voice_map = speakers.get("voice_map") if isinstance(speakers, dict) else None
     if isinstance(voice_map, dict):
@@ -421,7 +425,7 @@ def _snapshot_voice(configuration: dict[str, Any]) -> None:
     # auditioning the installed latent voice; it is not an OmniVoice cloning
     # reference. An explicit engine always wins over reference-like metadata.
     uses_omnivoice = voice.engine == "omnivoice" or (
-        voice.engine not in {"edge", "zerotts"}
+        voice.engine != "zerotts"
         and bool(
             voice.omnivoice_mode
             or voice.reference_audio_url

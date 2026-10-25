@@ -15,7 +15,7 @@ LOCAL_DIARIZATION_URL = "http://127.0.0.1:8010"
 
 @dataclass
 class RuntimeSettings:
-    tts_provider: str = "edge"
+    tts_provider: str = "zerotts"
     prefer_local_gpu: bool = True
     prefer_existing_subtitles: bool = True
     nvidia_api_key: str = ""
@@ -56,10 +56,9 @@ def get_runtime_settings() -> RuntimeSettings:
     if configured_runtime != "colab":
         configured_url = LOCAL_OMNIVOICE_URL
     # Migrate selections for providers that are no longer shipped.
-    tts_provider = str(data.get("tts_provider") or os.getenv("AETHER_TTS_PROVIDER", "edge")).strip().lower()
-    if tts_provider == "vieneu":
-        tts_provider = "edge"
-    elif tts_provider == "nghitts":
+    tts_provider = str(data.get("tts_provider") or os.getenv("AETHER_TTS_PROVIDER", "zerotts")).strip().lower()
+    if tts_provider != "omnivoice":
+        # Edge, VieNeu and NGHI-TTS were removed; ZeroTTS is the offline default.
         tts_provider = "zerotts"
     return RuntimeSettings(
         tts_provider=tts_provider,

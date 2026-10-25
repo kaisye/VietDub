@@ -67,7 +67,7 @@ class BulkVideoCreate(BaseModel):
     urls: list[str] = Field(min_length=1)
     source_language: str = "auto"
     target_language: str = "VI"
-    voice: str = "vi-VN-HoaiMyNeural"
+    voice: str = "zerotts_maichi"
     platform: str = "YouTube"
     workflow_template: str = "Full Localization"
 
@@ -103,7 +103,7 @@ class MediaJobCreate(BaseModel):
     content: str = ""
     source_language: str = "auto"
     target_language: str = "VI"
-    voice: str = "vi-VN-HoaiMyNeural"
+    voice: str = "zerotts_maichi"
     voice_rate: str = "+0%"
     voice_mode: str = ""
     voice_instruction: str = ""
@@ -354,7 +354,7 @@ class ProductionPresetCreate(BaseModel):
                     "description": "Context-aware Vietnamese localization for historical series.",
                     "category": "Series",
                     "configuration": {
-                        "voice": {"voice_id": "vi-VN-NamMinhNeural", "rate": -4},
+                        "voice": {"voice_id": "zerotts_giahuy", "rate": -4},
                         "translation": {"tone": "Literary, historically aware, natural Vietnamese"},
                         "subtitle": {"style_id": "default", "position": "bottom"},
                     },
@@ -461,7 +461,7 @@ class ProjectCreate(BaseModel):
                     "origin_preset_id": "preset-id",
                     "glossary": {"周": "Chu", "汉": "Hán"},
                     "voice_cast": {
-                        "narrator": {"voice_id": "vi-VN-NamMinhNeural", "rate": -4}
+                        "narrator": {"voice_id": "zerotts_giahuy", "rate": -4}
                     },
                 }
             ]
@@ -706,7 +706,7 @@ class SubtitleRegionDetectOut(BaseModel):
 
 
 class RuntimeSettingsOut(BaseModel):
-    tts_provider: str = "edge"
+    tts_provider: str = "zerotts"
     prefer_local_gpu: bool = True
     prefer_existing_subtitles: bool = True
     nvidia_api_key: str = ""
@@ -788,7 +788,7 @@ class TranslationRouterStatusOut(BaseModel):
 
 
 class WorkspaceSettingsOut(BaseModel):
-    default_voice_id: str = "vi-VN-HoaiMyNeural"
+    default_voice_id: str = "zerotts_maichi"
 
 
 class WorkspaceSettingsPatch(BaseModel):
@@ -935,7 +935,7 @@ class OmniVoiceRuntimeOptionsOut(BaseModel):
     torch: dict
     options: list[OmniVoiceRuntimeOptionOut]
     prefer_local_gpu: bool = True
-    effective_tts_runtime: str = "edge"
+    effective_tts_runtime: str = "zerotts"
 
 
 class OmniVoiceLocalStatusOut(BaseModel):
