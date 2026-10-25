@@ -45,6 +45,7 @@ def ensure_storage() -> Path:
 MEDIA_FOLDERS = (
     "raw-videos", "subtitles", "audio", "audio-bed", "audio-cues",
     "rendered-outputs", "thumbnails", "reports", "source-transcripts",
+    "editor", "editor-exports",
 )
 
 

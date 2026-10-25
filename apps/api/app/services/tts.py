@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .ffmpeg_compat import complex_filter_file_args
 from .progress import report_progress
 from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_duration_scale
@@ -1328,7 +1329,7 @@ def _resolve_omnivoice_base_url(settings) -> str:
     if not base_url:
         raise RuntimeError("OMNIVOICE_API_URL is required when AETHER_TTS_PROVIDER=omnivoice.")
     if settings.omnivoice_runtime != "colab":
-        return base_url
+        return _ensure_local_omnivoice_running(settings, base_url)
     if _omnivoice_health_ready(base_url):
         return base_url
 
@@ -1363,6 +1364,47 @@ def _resolve_omnivoice_base_url(settings) -> str:
     raise RuntimeError(
         f"Colab OmniVoice did not become ready within {timeout} seconds "
         f"(last state: {last_state or 'unknown'}). Open Runtime Settings and retry the job."
+    )
+
+
+def _ensure_local_omnivoice_running(settings, base_url: str) -> str:
+    """Start the local OmniVoice server on demand and wait until it answers.
+
+    The server is only auto-started when OmniVoice is the default TTS provider.
+    A job that picks an OmniVoice voice while another engine is the default
+    (or after a backend restart, which takes the child server down with it)
+    would otherwise hit a refused connection on 127.0.0.1:8008.
+    """
+    if _omnivoice_health_ready(base_url):
+        return base_url
+
+    from .omnivoice_local_runtime import local_omnivoice_status, start_local_omnivoice
+
+    report_progress("Đang khởi động OmniVoice cục bộ…")
+    status = start_local_omnivoice(settings)
+    timeout = _env_int("AETHER_OMNIVOICE_LOCAL_START_TIMEOUT_SECONDS", 600, minimum=30, maximum=3600)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = str(status.get("state") or "")
+        if state == "setup_required":
+            raise RuntimeError(
+                "OmniVoice cục bộ chưa được cài đặt. Vào Cấu hình > OmniVoice để cài, rồi bấm Thử lại. "
+                f"Chi tiết: {status.get('error') or 'không tìm thấy môi trường .venv-omnivoice'}"
+            )
+        if state == "error":
+            raise RuntimeError(
+                f"OmniVoice cục bộ không khởi động được: {status.get('error') or 'xem log'} "
+                f"(log: {status.get('log_path')})"
+            )
+        if _omnivoice_health_ready(base_url):
+            return base_url
+        report_progress("Đang tải model OmniVoice lên GPU…")
+        time.sleep(3)
+        status = local_omnivoice_status(settings)
+
+    raise RuntimeError(
+        f"OmniVoice cục bộ không sẵn sàng sau {timeout} giây. Xem log tại "
+        f"{status.get('log_path')} rồi bấm Thử lại."
     )
 
 
@@ -2884,11 +2926,62 @@ def _concat_audio(parts: list[Path], output: Path, list_file: Path) -> None:
         raise RuntimeError(f"Unable to concatenate aligned TTS audio: {result.stderr[-1000:]}")
 
 
+# amix pads every adelay'd input to the full timeline, so one pass over N
+# segments costs N x timeline length. A 43-min video with 643 segments ran past
+# the 900 s timeout; premixing small batches over their own short windows keeps
+# the work proportional to the audio actually present.
+_MIX_BATCH_SIZE = 32
+
+
 def _mix_timed_audio(segments: list[TimedAudioSegment], output: Path, filter_file: Path, duration: float) -> None:
     if not segments:
         raise RuntimeError("No timed audio segments were generated for TTS alignment.")
 
     duration = max(0.25, duration)
+    level = 0
+    while len(segments) > _MIX_BATCH_SIZE:
+        segments = _premix_segment_batches(segments, filter_file.parent, level)
+        level += 1
+    _run_timeline_mix(
+        segments, output, filter_file, duration, offset=0.0, codec="libmp3lame", limit=True
+    )
+
+
+def _premix_segment_batches(
+    segments: list[TimedAudioSegment], workdir: Path, level: int
+) -> list[TimedAudioSegment]:
+    ordered = sorted(segments, key=lambda segment: segment.start)
+    batches: list[TimedAudioSegment] = []
+    for number, first in enumerate(range(0, len(ordered), _MIX_BATCH_SIZE), start=1):
+        batch = ordered[first : first + _MIX_BATCH_SIZE]
+        start = max(0.0, batch[0].start)
+        end = max(segment.start + max(0.05, segment.end - segment.start) for segment in batch)
+        window = max(0.05, end - start)
+        path = workdir / f"timeline_batch_{level}_{number:04d}.wav"
+        # Float WAV keeps overlapping peaks unclipped until the final limiter.
+        _run_timeline_mix(
+            batch,
+            path,
+            workdir / f"timeline_batch_{level}_{number:04d}.txt",
+            window,
+            offset=start,
+            codec="pcm_f32le",
+            limit=False,
+        )
+        batches.append(TimedAudioSegment(path=path, start=start, end=start + window))
+    return batches
+
+
+def _run_timeline_mix(
+    segments: list[TimedAudioSegment],
+    output: Path,
+    filter_file: Path,
+    duration: float,
+    *,
+    offset: float,
+    codec: str,
+    limit: bool,
+) -> None:
     command = [
         "ffmpeg",
         "-y",
@@ -2902,15 +2995,14 @@ def _mix_timed_audio(segments: list[TimedAudioSegment], output: Path, filter_fil
     for segment in segments:
         command.extend(["-i", str(segment.path)])
 
-    filter_file.write_text(_timeline_filter(segments, duration), encoding="utf-8")
+    filter_file.write_text(_timeline_filter(segments, duration, offset=offset, limit=limit), encoding="utf-8")
     command.extend(
         [
-            "-filter_complex_script",
-            str(filter_file),
+            *complex_filter_file_args(filter_file),
             "-map",
             "[aout]",
             "-c:a",
-            "libmp3lame",
+            codec,
             "-t",
             f"{duration:.3f}",
             str(output),
@@ -2921,11 +3013,17 @@ def _mix_timed_audio(segments: list[TimedAudioSegment], output: Path, filter_fil
         raise RuntimeError(f"Unable to mix timed TTS audio: {result.stderr[-1000:]}")
 
 
-def _timeline_filter(segments: list[TimedAudioSegment], duration: float) -> str:
+def _timeline_filter(
+    segments: list[TimedAudioSegment],
+    duration: float,
+    *,
+    offset: float = 0.0,
+    limit: bool = True,
+) -> str:
     lines = ["[0:a]volume=0[base]"]
     labels = ["[base]"]
     for index, segment in enumerate(segments, start=1):
-        delay_ms = max(0, round(segment.start * 1000))
+        delay_ms = max(0, round((segment.start - offset) * 1000))
         segment_duration = max(0.05, segment.end - segment.start)
         label = f"s{index}"
         lines.append(
@@ -2940,8 +3038,9 @@ def _timeline_filter(segments: list[TimedAudioSegment], duration: float) -> str:
     lines.append(
         "".join(labels)
         + f"amix=inputs={len(labels)}:duration=first:dropout_transition=0:normalize=0,"
-        + f"atrim=0:{duration:.3f},"
-        + "alimiter=limit=0.95[aout]"
+        + f"atrim=0:{duration:.3f}"
+        + (",alimiter=limit=0.95" if limit else "")
+        + "[aout]"
     )
     return ";\n".join(lines)
 

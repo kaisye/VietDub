@@ -47,6 +47,11 @@ from .schemas import (
     MediaJobOut,
     MediaJobOutputOut,
     MediaJobPatch,
+    EditorDraftRequest,
+    EditorInsertRequest,
+    EditorStateRequest,
+    EditorPatchRequest,
+    EditorSplitRequest,
     MediaJobVoiceRerenderRequest,
     ColabAccountSwitchIn,
     ColabAccountsOut,
@@ -133,6 +138,7 @@ from .services.storage import (
     remove_job_artifacts,
     storage_usage,
 )
+from .services import editor
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
     apply_runtime_secrets_to_env,
@@ -182,13 +188,17 @@ from .services.workspace_settings import (
 )
 from .worker import (
     append_log,
+    fail_interrupted_jobs,
     cancel_job,
     clone_job_as_new,
     confirm_speaker_mapping,
     continue_job,
+    editor_render_alive,
+    editor_voice_settings,
     queue_job,
     rerender_job_with_voice,
     retry_job,
+    start_editor_render,
 )
 
 
@@ -210,6 +220,7 @@ async def lifespan(app: FastAPI):
     with next(get_db()) as db:
         seed_database(db)
         ensure_builtin_production_preset(db)
+        fail_interrupted_jobs(db)
     yield
 
 
@@ -876,8 +887,14 @@ def _runtime_settings_response(settings=None) -> RuntimeSettingsOut:
     data["nvidia_api_key"] = ""
     data["groq_api_key_configured"] = bool(settings.groq_api_key)
     data["groq_api_key"] = ""
+    data["soniox_api_key_configured"] = bool(settings.soniox_api_key)
+    data["soniox_api_key"] = ""
+    data["openrouter_api_key_configured"] = bool(settings.openrouter_api_key)
+    data["openrouter_api_key"] = ""
     data["ngrok_authtoken_configured"] = bool(settings.ngrok_authtoken)
     data["ngrok_authtoken"] = ""
+    data["local_translation_api_key_configured"] = bool(settings.local_translation_api_key)
+    data["local_translation_api_key"] = ""
     return RuntimeSettingsOut.model_validate(data)
 
 
@@ -1895,6 +1912,279 @@ def render_audio_cues(job_id: str, db: Session = Depends(get_db)) -> MediaJobOut
     db.commit()
     db.refresh(job)
     return MediaJobOut.model_validate(job)
+
+
+def _editor_job(job_id: str, db: Session) -> MediaJob:
+    job = db.get(MediaJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+def _editor_workspace(job: MediaJob, rebuild: bool = False) -> dict:
+    workspace = None if rebuild else editor.load_workspace(job.id)
+    if workspace is None:
+        try:
+            workspace = editor.build_workspace(
+                job.id,
+                parse_configuration_json(job.configuration_snapshot_json),
+                job.source_title or "",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not {"audio", "style", "max_lines", "original_regions"} <= workspace.keys():
+        # Workspaces created before volume / style controls existed.
+        configuration = parse_configuration_json(job.configuration_snapshot_json)
+        workspace.setdefault("audio", editor.default_audio(configuration))
+        workspace.setdefault("style", editor.default_style(configuration))
+        workspace.setdefault("max_lines", editor.default_max_lines(configuration))
+        workspace.setdefault("original_regions", [])
+        workspace.pop("subtitle", None)
+        editor.save_workspace(workspace)
+    if any("fade_in" not in region for region in workspace["original_regions"]):
+        # Regions saved before fades existed.
+        workspace["original_regions"] = editor.normalize_regions(
+            workspace["original_regions"], workspace["duration"]
+        )
+        editor.save_workspace(workspace)
+    if workspace["render"].get("status") == "running" and not editor_render_alive(job.id):
+        # The backend restarted mid-render; the thread is gone.
+        workspace["render"] = {"status": "failed", "error": "Render bị ngắt do backend khởi động lại."}
+        editor.save_workspace(workspace)
+    return workspace
+
+
+@app.get("/jobs/{job_id}/editor")
+def get_editor_workspace(
+    job_id: str, rebuild: bool = False, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    if rebuild and editor_render_alive(job_id):
+        raise HTTPException(status_code=409, detail="Đang render, chưa thể dựng lại workspace.")
+    with editor.workspace_lock(job_id):
+        return editor.with_issues(_editor_workspace(job, rebuild))
+
+
+@app.patch("/jobs/{job_id}/editor")
+def patch_editor_workspace(
+    job_id: str, payload: EditorPatchRequest, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace = editor.patch_workspace(
+            _editor_workspace(job),
+            [segment.model_dump(exclude_unset=True) for segment in payload.segments],
+            payload.blur.model_dump(exclude_none=True) if payload.blur else None,
+            payload.audio.model_dump(exclude_none=True) if payload.audio else None,
+            payload.style,
+            payload.max_lines,
+            [region.model_dump() for region in payload.original_regions]
+            if payload.original_regions is not None
+            else None,
+        )
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments")
+def insert_editor_segment(
+    job_id: str, payload: EditorInsertRequest, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace, segment_id = editor.insert_segment(
+            _editor_workspace(job), payload.start, payload.end, payload.text
+        )
+        return {**editor.with_issues(workspace), "created_id": segment_id}
+
+
+@app.delete("/jobs/{job_id}/editor/segments/{segment_id}")
+def delete_editor_segment(
+    job_id: str, segment_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.delete_segment(_editor_workspace(job), segment_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        return editor.with_issues(workspace)
+
+
+@app.put("/jobs/{job_id}/editor/state")
+def replace_editor_state(
+    job_id: str, payload: EditorStateRequest, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        state = payload.model_dump()
+        try:
+            workspace = editor.replace_state(_editor_workspace(job), state)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"Trạng thái không hợp lệ: {exc}") from exc
+        return editor.with_issues(workspace)
+
+
+@app.get("/jobs/{job_id}/editor/drafts")
+def list_editor_drafts(job_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    _editor_job(job_id, db)
+    return editor.list_drafts(job_id)
+
+
+@app.post("/jobs/{job_id}/editor/drafts")
+def save_editor_draft(
+    job_id: str, payload: EditorDraftRequest, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        return editor.save_draft(_editor_workspace(job), payload.name)
+
+
+@app.post("/jobs/{job_id}/editor/drafts/{draft_id}/restore")
+def restore_editor_draft(
+    job_id: str, draft_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    if editor_render_alive(job_id):
+        raise HTTPException(status_code=409, detail="Đang render, chờ xong rồi mới khôi phục bản nháp.")
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.restore_draft(_editor_workspace(job), draft_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Draft not found.") from exc
+        return editor.with_issues(workspace)
+
+
+@app.delete("/jobs/{job_id}/editor/drafts/{draft_id}")
+def delete_editor_draft(job_id: str, draft_id: str, db: Session = Depends(get_db)) -> dict:
+    _editor_job(job_id, db)
+    editor.delete_draft(job_id, draft_id)
+    return {"status": "ok"}
+
+
+@app.get("/jobs/{job_id}/editor/waveform")
+def get_editor_waveform(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace = _editor_workspace(job)
+    return editor.original_waveform(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments/{segment_id}/split")
+def split_editor_segment(
+    job_id: str, segment_id: str, payload: EditorSplitRequest, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.split_segment(_editor_workspace(job), segment_id, payload.at_char)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments/{segment_id}/merge-next")
+def merge_editor_segment(
+    job_id: str, segment_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.merge_with_next(_editor_workspace(job), segment_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments/{segment_id}/swap-audio")
+def swap_editor_segment_audio(
+    job_id: str, segment_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.swap_previous_audio(_editor_workspace(job), segment_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments/{segment_id}/tts")
+def regenerate_editor_segment_audio(
+    job_id: str, segment_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    settings = editor_voice_settings(job)
+    with editor.workspace_lock(job_id):
+        try:
+            workspace = editor.regenerate_segment_audio(
+                _editor_workspace(job), segment_id, **settings
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Tạo lại audio lỗi: {exc}") from exc
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/segments/{segment_id}/translate")
+def retranslate_editor_segment(
+    job_id: str, segment_id: str, db: Session = Depends(get_db)
+) -> dict:
+    job = _editor_job(job_id, db)
+    target_language = str(editor_voice_settings(job)["target_language"])
+    with editor.workspace_lock(job_id):
+        workspace = _editor_workspace(job)
+        try:
+            workspace = editor.retranslate_segment(
+                workspace,
+                segment_id,
+                source_language=workspace.get("source_language") or job.source_language,
+                target_language=target_language,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Segment not found.") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Dịch lại lỗi: {exc}") from exc
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/export")
+def export_editor_workspace(job_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    import platform
+    import subprocess
+
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        folder = editor.export_workspace(
+            _editor_workspace(job), parse_configuration_json(job.configuration_snapshot_json)
+        )
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", str(folder)])
+    elif system == "Windows":
+        subprocess.Popen(["explorer", str(folder)])
+    else:
+        subprocess.Popen(["xdg-open", str(folder)])
+    return {"folder": str(folder)}
+
+
+@app.post("/jobs/{job_id}/editor/render")
+def render_editor_workspace(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        _editor_workspace(job)
+    try:
+        start_editor_render(job)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    with editor.workspace_lock(job_id):
+        return editor.with_issues(editor.load_workspace(job_id))
 
 
 @app.get("/jobs/{job_id}/review", response_model=VideoReviewOut)

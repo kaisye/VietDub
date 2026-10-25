@@ -21,6 +21,14 @@ export type RuntimeSettings = {
   local_translation_base_url: string;
   local_translation_model: string;
   local_translation_api_key: string;
+  local_translation_api_key_configured?: boolean;
+  soniox_api_key: string;
+  soniox_api_key_configured: boolean;
+  openrouter_api_key: string;
+  openrouter_api_key_configured: boolean;
+  openrouter_model: string;
+  ytdlp_cookies_browser: string;
+  ytdlp_cookies_file: string;
   ngrok_authtoken: string;
   ngrok_authtoken_configured: boolean;
   ngrok_domain: string;
@@ -93,6 +101,12 @@ export type SubtitleStyle = {
   box_color: string;
   box_opacity: number;
   box_blur: number;
+  /** classic = libass whole-cue box; panel = drawn box with rounded corners, text keeps its outline. */
+  box_style?: "classic" | "panel";
+  /** 0–1 fraction of half the box's short side (1 = pill). */
+  box_radius?: number;
+  /** 0–1.5 × font size. */
+  box_padding?: number;
   outline_color: string;
   outline: number;
   shadow: number;
@@ -278,4 +292,92 @@ export type NewJobInput = {
   burn_subtitles: boolean;
   download_quality: string;
   render_quality: string;
+};
+
+export type EditorIssue = "empty" | "untranslated" | "no_audio" | "stale_audio" | "overrun";
+
+export type EditorSegment = {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  source_text: string;
+  audio_url: string | null;
+  audio_start: number;
+  audio_duration: number;
+  audio_text: string;
+  audio_generated_at?: string;
+  /** Voice length the user set on the timeline; regenerated takes fit it. */
+  voice_slot?: number;
+  /** Natural length of the unfitted take behind audio_url, once known. */
+  audio_source_duration?: number;
+  previous_audio_url?: string | null;
+  previous_audio_duration?: number;
+  muted: boolean;
+  issues: EditorIssue[];
+  /** Burned-in layout: consecutive timed displays of at most max_lines lines. */
+  display: { start: number; end: number; lines: string[] }[];
+};
+
+export type EditorBlur = {
+  enabled: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  style: "box" | "vertical" | "horizontal";
+  strength: number;
+};
+
+export type EditorStyle = Omit<SubtitleStyle, "alignment" | "margin_v" | `hard_sub_blur_${string}`>;
+
+export type EditorSubtitleLayout = EditorStyle & {
+  font_px: number;
+  chars_per_line: number;
+  max_lines: number;
+};
+
+export type EditorRegion = {
+  id: string;
+  start: number;
+  end: number;
+  volume: number;
+  /** Seconds to ramp from the base volume up to `volume` / back down. */
+  fade_in: number;
+  fade_out: number;
+};
+
+export type EditorAudio = {
+  original_volume: number;
+  dubbed_volume: number;
+  /** Switches used by both the preview and the render. */
+  dubbed_enabled: boolean;
+  original_enabled: boolean;
+};
+
+export type EditorWorkspace = {
+  job_id: string;
+  title: string;
+  source_language: string;
+  video_url: string;
+  duration: number;
+  width: number;
+  height: number;
+  blur: EditorBlur;
+  audio: EditorAudio;
+  style: EditorStyle;
+  max_lines: number;
+  /** Original-audio volume overrides (percent) inside time ranges. */
+  original_regions: EditorRegion[];
+  /** Derived server-side from style; never sent back. */
+  subtitle: EditorSubtitleLayout;
+  segments: EditorSegment[];
+  render: { status: "idle" | "running" | "done" | "failed"; output_url?: string; error?: string };
+  updated_at: string;
+};
+
+export type EditorSegmentPatch = Partial<Pick<EditorSegment, "text" | "start" | "end" | "muted" | "audio_start">> & {
+  id: string;
+  /** Re-time the voice take to last this many seconds (server speeds it up / slows it down). */
+  audio_length?: number;
 };

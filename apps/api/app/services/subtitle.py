@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -100,6 +101,19 @@ def extract_subtitle(
 
     stt_provider_error: RuntimeError | None = None
     riva_authorization_failed = False
+    # Soniox runs first when a key is saved; NVIDIA Riva and Groq stay as fallbacks.
+    if _soniox_stt_enabled() and _soniox_stt_configured():
+        try:
+            logger.info("Running Soniox STT for job %s.", video_path.stem)
+            return _generate_subtitle_with_soniox(video_path, target_language, source_language)
+        except RuntimeError as exc:
+            logger.warning(
+                "Soniox STT failed for job %s: %s. Trying the next STT provider.",
+                video_path.stem,
+                exc,
+            )
+            stt_provider_error = exc
+
     if _stt_fallback_enabled() and _nvidia_configured():
         try:
             return _generate_subtitle_with_nvidia_whisper(video_path, target_language, source_language, source_url)
@@ -1229,6 +1243,214 @@ def _is_riva_authorization_error(exc: Exception) -> bool:
             "invalid api key",
             "invalid_api_key",
         )
+    )
+
+
+# ── Soniox STT ───────────────────────────────────────────────────────────────
+
+SONIOX_API_BASE_URL = "https://api.soniox.com"
+_SONIOX_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！")
+_SONIOX_SOFT_BREAK = (",", ";", ":", "，", "、", "；", "：")
+
+
+def _soniox_api_key() -> str | None:
+    key = (os.getenv("SONIOX_API_KEY") or "").strip()
+    return key or None
+
+
+def _soniox_stt_configured() -> bool:
+    return bool(_soniox_api_key())
+
+
+def _soniox_stt_enabled() -> bool:
+    return os.getenv("AETHER_SONIOX_STT_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def _generate_subtitle_with_soniox(
+    video_path: Path,
+    target_language: str,
+    source_language: str | None,
+) -> Path:
+    audio_path = _extract_stt_audio(video_path)
+    try:
+        tokens = _request_soniox_tokens(audio_path, source_language)
+        spans = _soniox_tokens_to_spans(tokens)
+        dominant_language = _dominant_transcript_language(spans, source_language)
+        _apply_span_quality_flags(spans, dominant_language, flag_missing_words=False)
+        srt_text = _transcript_spans_to_srt(spans)
+    except Exception as exc:
+        raise RuntimeError(f"Soniox STT failed: {exc}") from exc
+
+    if "-->" not in srt_text or not subtitle_to_plain_text_from_text(srt_text):
+        raise RuntimeError("Soniox STT returned no readable transcript.")
+
+    path = ensure_storage() / "subtitles" / f"{video_path.stem}.{target_language.lower()}.soniox.srt"
+    path.write_text(srt_text, encoding="utf-8")
+    _write_source_transcript_artifacts(path, spans, dominant_language, source_kind="stt")
+    return path
+
+
+def _request_soniox_tokens(audio_path: Path, source_language: str | None) -> list[dict]:
+    """Upload audio, run an async Soniox transcription and return its tokens.
+
+    The uploaded file and the transcription are deleted afterwards so audio does
+    not linger in the Soniox account.
+    """
+    model = (os.getenv("AETHER_SONIOX_STT_MODEL") or "stt-async-v5").strip()
+    timeout = _optional_positive_int("AETHER_SONIOX_STT_TIMEOUT_SECONDS") or 1800
+    poll_seconds = _optional_float("AETHER_SONIOX_STT_POLL_SECONDS", 2.0, 0.5, 30.0)
+
+    with httpx.Client(
+        base_url=SONIOX_API_BASE_URL,
+        headers={"Authorization": f"Bearer {_soniox_api_key()}"},
+        timeout=httpx.Timeout(120.0, read=300.0),
+    ) as client:
+        with audio_path.open("rb") as audio_file:
+            upload = client.post("/v1/files", files={"file": (audio_path.name, audio_file, "audio/wav")})
+        _raise_for_soniox_error(upload)
+        file_id = upload.json()["id"]
+        transcription_id: str | None = None
+        try:
+            config: dict[str, object] = {
+                "model": model,
+                "file_id": file_id,
+                "enable_language_identification": True,
+                "client_reference_id": audio_path.stem[:256],
+            }
+            iso_lang = _groq_iso_language_code(source_language)
+            if iso_lang:
+                config["language_hints"] = [iso_lang]
+            created = client.post("/v1/transcriptions", json=config)
+            _raise_for_soniox_error(created)
+            transcription_id = created.json()["id"]
+
+            deadline = time.monotonic() + timeout
+            while True:
+                status_response = client.get(f"/v1/transcriptions/{transcription_id}")
+                _raise_for_soniox_error(status_response)
+                status = status_response.json()
+                if status.get("status") == "completed":
+                    break
+                if status.get("status") == "error":
+                    raise RuntimeError(status.get("error_message") or "Soniox transcription failed.")
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Soniox transcription timed out after {timeout}s.")
+                time.sleep(poll_seconds)
+
+            transcript = client.get(f"/v1/transcriptions/{transcription_id}/transcript")
+            _raise_for_soniox_error(transcript)
+            tokens = transcript.json().get("tokens") or []
+        finally:
+            if transcription_id:
+                _soniox_best_effort_delete(client, f"/v1/transcriptions/{transcription_id}")
+            _soniox_best_effort_delete(client, f"/v1/files/{file_id}")
+    return [token for token in tokens if isinstance(token, dict)]
+
+
+def _raise_for_soniox_error(response: httpx.Response) -> None:
+    if response.is_success:
+        return
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = str(payload.get("message") or payload.get("error_message") or payload.get("error") or "")
+    except ValueError:
+        detail = response.text
+    detail = " ".join(detail.split())[:400] or response.reason_phrase
+    if response.status_code in (401, 403):
+        raise RuntimeError(f"Soniox từ chối API key (HTTP {response.status_code}): {detail}")
+    raise RuntimeError(f"Soniox HTTP {response.status_code}: {detail}")
+
+
+def _soniox_best_effort_delete(client: httpx.Client, path: str) -> None:
+    try:
+        client.delete(path)
+    except httpx.HTTPError as exc:
+        logger.debug("Could not delete Soniox resource %s: %s", path, exc)
+
+
+def _soniox_tokens_to_spans(tokens: list[dict]) -> list[TranscriptSpan]:
+    """Group Soniox sub-word tokens into subtitle-sized spans.
+
+    A span closes at sentence punctuation, at a long pause, on a speaker change,
+    or when it grows too long (preferring a comma/word boundary when possible).
+    """
+    pause = _optional_float("AETHER_SONIOX_PAUSE_SECONDS", 0.8, 0.2, 5.0)
+    soft_max = _optional_float("AETHER_SONIOX_SPAN_SOFT_MAX_SECONDS", 7.0, 2.0, 30.0)
+    hard_max = max(soft_max, _optional_float("AETHER_SONIOX_SPAN_MAX_SECONDS", 12.0, 3.0, 60.0))
+
+    spans: list[TranscriptSpan] = []
+    current: list[dict] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        span = _soniox_span_from_tokens(current, len(spans) + 1)
+        if span is not None:
+            spans.append(span)
+        current.clear()
+
+    for token in tokens:
+        if token.get("translation_status") == "translation":
+            continue
+        text = str(token.get("text") or "")
+        if not text or token.get("start_ms") is None:
+            continue
+        start = float(token["start_ms"]) / 1000.0
+        if current:
+            previous = current[-1]
+            gap = start - float(previous.get("end_ms") or previous["start_ms"]) / 1000.0
+            speaker_changed = (
+                token.get("speaker") is not None
+                and previous.get("speaker") is not None
+                and token.get("speaker") != previous.get("speaker")
+            )
+            starts_word = text[:1].isspace()
+            duration = start - float(current[0]["start_ms"]) / 1000.0
+            if gap >= pause or speaker_changed or (duration >= hard_max and starts_word):
+                flush()
+        current.append(token)
+
+        duration = float(token.get("end_ms") or token["start_ms"]) / 1000.0 - float(current[0]["start_ms"]) / 1000.0
+        stripped = text.rstrip()
+        if stripped.endswith(_SONIOX_SENTENCE_END) and duration >= 1.0:
+            flush()
+        elif stripped.endswith(_SONIOX_SOFT_BREAK) and duration >= soft_max:
+            flush()
+    flush()
+    return spans
+
+
+def _soniox_span_from_tokens(tokens: list[dict], index: int) -> TranscriptSpan | None:
+    text = _normalize_text("".join(str(token.get("text") or "") for token in tokens))
+    if not text:
+        return None
+
+    words: list[TranscriptWord] = []
+    for token in tokens:
+        token_text = str(token.get("text") or "")
+        token_start = float(token["start_ms"]) / 1000.0
+        token_end = float(token.get("end_ms") or token["start_ms"]) / 1000.0
+        if words and not token_text[:1].isspace():
+            last = words[-1]
+            words[-1] = TranscriptWord(text=last.text + token_text, start=last.start, end=max(last.end, token_end))
+        elif token_text.strip():
+            words.append(TranscriptWord(text=token_text.strip(), start=token_start, end=token_end))
+
+    languages = [str(token.get("language") or "") for token in tokens if token.get("language")]
+    detected = max(set(languages), key=languages.count) if languages else _detect_text_language(text)
+    start = float(tokens[0]["start_ms"]) / 1000.0
+    end = max(float(token.get("end_ms") or token["start_ms"]) for token in tokens) / 1000.0
+    return TranscriptSpan(
+        id=f"span-{index:04d}",
+        start=max(0.0, start),
+        end=max(start + 0.1, end),
+        raw_text=text,
+        reconstructed_text=text,
+        detected_language=detected,
+        timestamp_quality="observed",
+        words=[word for word in words if word.text],
     )
 
 

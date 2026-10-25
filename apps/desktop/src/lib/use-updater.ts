@@ -20,6 +20,26 @@ type Update = {
   install: () => Promise<void>;
 };
 
+// Retry delays for the update check. The automatic check fires right at app
+// launch, often before Wi-Fi/DNS (e.g. Tailscale) is ready, and the updater then
+// fails with a bare "error sending request for url".
+const CHECK_RETRY_DELAYS_MS = [3000, 10000];
+
+function isNetworkError(message: string): boolean {
+  return /error sending request|connection|timed out|dns|network|tls|certificate/i.test(message);
+}
+
+function friendlyError(message: string): string {
+  if (isNetworkError(message)) {
+    return "Không kết nối được máy chủ cập nhật (GitHub). Kiểm tra mạng/VPN rồi bấm Kiểm tra lại.";
+  }
+  return message;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -36,30 +56,47 @@ export function useUpdater() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const checkForUpdates = useCallback(async () => {
+  /**
+   * `manual` is true when the user pressed "Check again". The automatic launch
+   * check stays silent on network failures: being offline for a moment is not
+   * worth a red banner, and the next launch checks again.
+   */
+  const checkForUpdates = useCallback(async (manual = false) => {
     if (!isTauri()) return;
     setStatus("checking");
     setError(null);
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const found = (await check()) as unknown as Update | null;
-      if (found && found.available) {
-        setUpdate(found);
-        setVersion(found.version);
-        setStatus("available");
-      } else {
-        setUpdate(null);
-        setVersion(null);
-        setStatus("uptodate");
+    const { check } = await import("@tauri-apps/plugin-updater");
+    let lastError = "";
+    for (let attempt = 0; attempt <= CHECK_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const found = (await check()) as unknown as Update | null;
+        if (found && found.available) {
+          setUpdate(found);
+          setVersion(found.version);
+          setStatus("available");
+        } else {
+          setUpdate(null);
+          setVersion(null);
+          setStatus("uptodate");
+        }
+        return;
+      } catch (cause) {
+        lastError = cause instanceof Error ? cause.message : String(cause);
+        if (!isNetworkError(lastError) || attempt === CHECK_RETRY_DELAYS_MS.length) break;
+        await sleep(CHECK_RETRY_DELAYS_MS[attempt]);
       }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("error");
     }
+    if (!manual && isNetworkError(lastError)) {
+      console.warn("Update check skipped (network):", lastError);
+      setStatus("idle");
+      return;
+    }
+    setError(friendlyError(lastError));
+    setStatus("error");
   }, []);
 
   useEffect(() => {
-    void checkForUpdates();
+    void checkForUpdates(false);
   }, [checkForUpdates]);
 
   const install = useCallback(async () => {
@@ -88,10 +125,12 @@ export function useUpdater() {
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(friendlyError(cause instanceof Error ? cause.message : String(cause)));
       setStatus("error");
     }
   }, [update]);
 
-  return { status, version, progress, error, install, check: checkForUpdates };
+  const checkManually = useCallback(() => checkForUpdates(true), [checkForUpdates]);
+
+  return { status, version, progress, error, install, check: checkManually };
 }

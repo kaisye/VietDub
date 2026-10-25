@@ -40,7 +40,7 @@ REM  Khong duoc de dau cach truoc "&&": cmd gan ca dau cach vao gia tri
 REM  (PYTHONUTF8="1 "), Python coi la khong hop le va thoat ngay voi loi
 REM  "Fatal Python error: preconfig_init_utf8_mode". Vi dung /k nen cua so
 REM  van mo, trong nhu backend dang chay du khong co python.exe nao ca.
-start "VietDub API (8386)" cmd /k "cd /d %REPO% && set PYTHONUTF8=1&& set KMP_DUPLICATE_LIB_OK=TRUE&& %PYTHON% -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8386 --app-dir apps\api"
+start "VietDub API (8386)" cmd /k "cd /d %REPO% && set PYTHONUTF8=1&& set KMP_DUPLICATE_LIB_OK=TRUE&& %PYTHON% -m uvicorn app.main:app --reload --reload-dir apps\api\app --host 127.0.0.1 --port 8386 --app-dir apps\api"
 
 echo === Cho backend khoi dong (6s) ...
 timeout /t 6 /nobreak >nul

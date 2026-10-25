@@ -308,11 +308,14 @@ trap cleanup EXIT INT TERM
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   say "1/2: Cong $PORT da co tien trinh lang nghe - dung lai backend dang chay."
 else
+  # Chi theo doi apps/api/app: neu theo doi ca repo, pip cai .venv-omnivoice
+  # (hang nghin file .py) se lam backend reload lien tuc, giet job dang chay
+  # va giet luon thread dang cai OmniVoice.
   say "1/2: Khoi dong backend FastAPI tai http://127.0.0.1:$PORT (log: backend-dev.log)"
   PYTHONUTF8=1 \
   KMP_DUPLICATE_LIB_OK=TRUE \
   "$PYTHON" -m uvicorn app.main:app \
-    --reload --host 127.0.0.1 --port "$PORT" --app-dir apps/api \
+    --reload --reload-dir apps/api/app --host 127.0.0.1 --port "$PORT" --app-dir apps/api \
     >"$LOG" 2>&1 &
   API_PID=$!
 

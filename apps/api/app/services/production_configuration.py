@@ -271,11 +271,15 @@ def safe_runtime_snapshot() -> dict[str, Any]:
         "translation": {
             "provider": settings.translation_provider,
             "model": (
-                settings.translation_nvidia_model
-                if settings.translation_provider == "nvidia"
+                settings.openrouter_model
+                if settings.translation_provider == "openrouter"
                 else settings.local_translation_model
             ),
-            "endpoint_category": _endpoint_category(settings.local_translation_base_url),
+            "endpoint_category": (
+                "remote"
+                if settings.translation_provider == "openrouter"
+                else _endpoint_category(settings.local_translation_base_url)
+            ),
         },
         "diarization": {
             "device": settings.diarization_device,

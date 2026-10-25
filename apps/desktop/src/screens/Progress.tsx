@@ -115,13 +115,18 @@ function engineLabel(
       if (subtitleStrategy === "ocr") return isVI ? "OCR phụ đề cứng" : "Hard-sub OCR";
       if (subtitleStrategy === "embedded") return isVI ? "Phụ đề có sẵn" : "Existing subs";
       if (!settings) return "";
+      if (settings.soniox_api_key_configured) return "Soniox";
       if (settings.nvidia_api_key_configured) return "NVIDIA Riva";
       if (settings.groq_api_key_configured) return "Groq Whisper";
       return isVI ? "Phụ đề có sẵn" : "Existing subs";
     }
     case "translating": {
-      // Translation always runs through the local 9router endpoint.
+      // Translation runs through the local 9router endpoint unless OpenRouter is chosen.
       if (!settings) return "9router";
+      if (settings.translation_provider === "openrouter") {
+        const short = (settings.openrouter_model || "qwen/qwen3.7-flash").split("/").pop();
+        return `OpenRouter · ${short}`;
+      }
       const model = settings.local_translation_model || "translate";
       const short = (model || "").split("/").pop() || "translate";
       return `9router · ${short}`;
@@ -451,7 +456,15 @@ function pillClass(status: string): string {
   return "pill idle";
 }
 
-export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBack: () => void }) {
+export default function ProgressScreen({
+  jobId,
+  onBack,
+  onOpenEditor,
+}: {
+  jobId: string;
+  onBack: () => void;
+  onOpenEditor: () => void;
+}) {
   const { t } = useT();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState("");
@@ -848,6 +861,9 @@ export default function ProgressScreen({ jobId, onBack }: { jobId: string; onBac
               {revealing
                 ? (isVI ? "Đang mở…" : "Opening…")
                 : t.progress_open}
+            </button>
+            <button className="btn" onClick={onOpenEditor}>
+              {isVI ? "Mở Editor" : "Open editor"}
             </button>
             <button
               className="btn"

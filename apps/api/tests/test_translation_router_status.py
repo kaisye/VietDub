@@ -108,5 +108,45 @@ def test_router_model_listing_is_not_ready_when_real_request_cannot_route(monkey
 
     assert status["ready"] is False
     assert status["state"] == "provider_not_configured"
-    assert "không cần API key từ VietDub" in status["message"]
+    assert "gán provider" in status["message"]
     assert status["models"] == ["translate"]
+
+
+def test_router_requiring_api_key_asks_for_key_and_sends_saved_key(monkeypatch) -> None:
+    missing_key = {"error": {"message": "Missing API key", "type": "authentication_error", "code": "invalid_api_key"}}
+    monkeypatch.setattr(translator, "get_runtime_settings", _settings)
+    monkeypatch.setattr(translator.httpx, "get", lambda *args, **kwargs: _response(401, missing_key))
+
+    status = translator.translation_router_status()
+
+    assert status["state"] == "provider_not_configured"
+    assert "API key 9router" in status["message"]
+
+    sent: list[dict[str, str]] = []
+
+    def keyed_settings() -> SimpleNamespace:
+        settings = _settings("vietdub")
+        settings.local_translation_api_key = "sk-test"
+        return settings
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int) -> httpx.Response:
+        sent.append(headers)
+        return _response(200, {"data": [{"id": "vietdub"}]})
+
+    def fake_post(url: str, *, headers: dict[str, str], json: dict, timeout: int) -> httpx.Response:
+        sent.append(headers)
+        return _response(
+            200,
+            {"choices": [{"message": {"content": "OK"}}]},
+            method="POST",
+            path="/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(translator, "get_runtime_settings", keyed_settings)
+    monkeypatch.setattr(translator.httpx, "get", fake_get)
+    monkeypatch.setattr(translator.httpx, "post", fake_post)
+
+    status = translator.translation_router_status()
+
+    assert status["ready"] is True
+    assert [h.get("Authorization") for h in sent] == ["Bearer sk-test", "Bearer sk-test"]

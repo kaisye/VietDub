@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,13 @@ DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
     "box_color": "#FFFFFF",
     "box_opacity": 1.0,
     "box_blur": 0,
+    # classic = libass whole-event box (Outline is its padding, text has no stroke);
+    # panel = a drawn box behind the text with rounded corners, so the text keeps
+    # its outline/shadow. Radius is a fraction of half the box's short side
+    # (1 = pill); padding is a fraction of the font size.
+    "box_style": "classic",
+    "box_radius": 0.35,
+    "box_padding": 0.35,
     "outline_color": "#000000",
     "outline": 0,
     "shadow": 0,
@@ -42,6 +50,7 @@ DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
 }
 
 HARD_SUB_BLUR_STYLES = ("box", "vertical", "horizontal")
+BOX_STYLES = ("classic", "panel")
 ASS_PLAY_RES_X = 384
 ASS_PLAY_RES_Y = 288
 # Companion SRT written next to the render subtitle, holding the source-language
@@ -91,31 +100,8 @@ def render_video(
     if background_audio_path:
         background_input_index = next_input_index
         command.extend(["-i", str(background_audio_path)])
-    audio_map = "0:a:0?"
-    if voice_input_index is not None and background_input_index is not None:
-        command.extend(
-            [
-                "-filter_complex",
-                _audio_mix_filter(
-                    voice_input_index=voice_input_index,
-                    background_input_index=background_input_index,
-                    audio_mix=audio_mix,
-                ),
-            ]
-        )
-        audio_map = "[aout]"
-    elif voice_input_index is not None:
-        audio_map = f"{voice_input_index}:a:0"
-    elif background_input_index is not None:
-        command.extend(
-            [
-                "-filter_complex",
-                _background_audio_filter(background_input_index, audio_mix),
-            ]
-        )
-        audio_map = "[aout]"
+    command.extend(["-map", "0:v:0", *_audio_map_args(voice_input_index, background_input_index, audio_mix)])
 
-    command.extend(["-map", "0:v:0", "-map", audio_map])
     video_filter = _video_filter(
         video_path,
         subtitle_path,
@@ -162,6 +148,10 @@ def normalize_subtitle_style(style: dict[str, Any] | None = None) -> dict[str, A
     merged["outline_color"] = _normalize_hex_color(merged.get("outline_color"), DEFAULT_SUBTITLE_STYLE["outline_color"])
     merged["box_opacity"] = _clamp_float(merged.get("box_opacity"), 0.0, 1.0, DEFAULT_SUBTITLE_STYLE["box_opacity"])
     merged["box_blur"] = _clamp_int(merged.get("box_blur"), 0, 24, DEFAULT_SUBTITLE_STYLE["box_blur"])
+    box_style = str(merged.get("box_style") or "classic").strip().lower()
+    merged["box_style"] = box_style if box_style in BOX_STYLES else "classic"
+    merged["box_radius"] = _clamp_float(merged.get("box_radius"), 0.0, 1.0, DEFAULT_SUBTITLE_STYLE["box_radius"])
+    merged["box_padding"] = _clamp_float(merged.get("box_padding"), 0.0, 1.5, DEFAULT_SUBTITLE_STYLE["box_padding"])
     merged["outline"] = _clamp_float(merged.get("outline"), 0.0, 8.0, DEFAULT_SUBTITLE_STYLE["outline"])
     merged["shadow"] = _clamp_int(merged.get("shadow"), 0, 8, DEFAULT_SUBTITLE_STYLE["shadow"])
     merged["margin_v"] = _clamp_int(merged.get("margin_v"), 0, 400, DEFAULT_SUBTITLE_STYLE["margin_v"])
@@ -316,37 +306,8 @@ def _render_with_subtitle_track(
     if background_audio_path:
         background_input_index = next_input_index
         command.extend(["-i", str(background_audio_path)])
-    audio_map = "0:a:0?"
-    if voice_input_index is not None and background_input_index is not None:
-        command.extend(
-            [
-                "-filter_complex",
-                _audio_mix_filter(
-                    voice_input_index=voice_input_index,
-                    background_input_index=background_input_index,
-                    audio_mix=audio_mix,
-                ),
-            ]
-        )
-        audio_map = "[aout]"
-    elif voice_input_index is not None:
-        audio_map = f"{voice_input_index}:a:0"
-    elif background_input_index is not None:
-        command.extend(
-            [
-                "-filter_complex",
-                _background_audio_filter(background_input_index, audio_mix),
-            ]
-        )
-        audio_map = "[aout]"
-    command.extend([
-        "-map",
-        "0:v:0",
-        "-map",
-        audio_map,
-        "-map",
-        f"{subtitle_input_index}:0",
-    ])
+    command.extend(["-map", "0:v:0", *_audio_map_args(voice_input_index, background_input_index, audio_mix)])
+    command.extend(["-map", f"{subtitle_input_index}:0"])
     video_filter = _video_filter(video_path, None, subtitle_style, aspect_ratio, max_lines=max_lines)
     if video_filter:
         command.extend(["-vf", video_filter])
@@ -490,6 +451,13 @@ def _srt_to_ass(
         margin_v = 0
 
     chars_per_line = _subtitle_chars_per_line(configured, video_size)
+    panel = configured["box_style"] == "panel" and float(configured["box_opacity"]) > 0
+    if panel:
+        border_style = 1
+        back_colour = _ass_color("#000000", 0.55)  # Shadow colour under BorderStyle 1.
+    else:
+        border_style = 4
+        back_colour = _ass_color(configured["box_color"], float(configured["box_opacity"]))
 
     # Parse SRT cues.
     srt_cues = _parse_srt_for_ass(srt_path)
@@ -510,9 +478,9 @@ def _srt_to_ass(
             f"Style: Default,{configured['font_name']},{font_size},"
             f"{_ass_color(configured['text_color'])},&H000000FF,"
             f"{_ass_color(configured['outline_color'])},"
-            f"{_ass_color(configured['box_color'], float(configured['box_opacity']))},"
+            f"{back_colour},"
             f"{-1 if configured['bold'] else 0},0,0,0,100,100,0,0,"
-            f"4,{configured['outline']},{configured['shadow']},"
+            f"{border_style},{configured['outline']},{configured['shadow']},"
             f"{alignment},{margin_l},{margin_r},{margin_v},1"
         ),
         "",
@@ -548,6 +516,7 @@ def _srt_to_ass(
         sub_cues = _wrap_cue_for_ass(cue_text, cue_start, cue_end, chars_per_line, max_lines)
         for s_start, s_end, s_text in sub_cues:
             ass_text = s_text.replace("\n", r"\N")
+            secondary_lines: list[str] = []
             if secondary_tag:
                 secondary_lines = _wrap_text_lines(
                     _secondary_text_for_span(secondary_cues, s_start, s_end),
@@ -556,14 +525,125 @@ def _srt_to_ass(
                 )
                 if secondary_lines:
                     ass_text += r"\N" + secondary_tag + r"\N".join(secondary_lines)
+            if panel:
+                block = [(line, font_size) for line in s_text.split("\n")]
+                if secondary_tag and secondary_lines:
+                    block += [(line, secondary_font_size) for line in secondary_lines]
+                ass_lines.append(
+                    f"Dialogue: 0,{_ass_time(s_start)},{_ass_time(s_end)},"
+                    f"Default,,0,0,0,,{_panel_drawing(block, configured, font_size, position_x, position_y, video_size)}"
+                )
             ass_lines.append(
-                f"Dialogue: 0,{_ass_time(s_start)},{_ass_time(s_end)},"
+                f"Dialogue: {1 if panel else 0},{_ass_time(s_start)},{_ass_time(s_end)},"
                 f"Default,,0,0,0,,{pos_tag}{ass_text}"
             )
 
     ass_path = srt_path.with_suffix(".render.ass")
     ass_path.write_text("\n".join(ass_lines) + "\n", encoding="utf-8-sig")
     return ass_path
+
+
+def _panel_drawing(
+    block: list[tuple[str, int]],
+    configured: dict[str, Any],
+    font_size: int,
+    position_x: float,
+    position_y: float,
+    video_size: tuple[int, int],
+) -> str:
+    """An ASS vector drawing of the (rounded) box behind one displayed cue."""
+    width, height = video_size
+    bold = bool(configured["bold"])
+    text_width = max(_text_width(line, configured["font_name"], bold, size) for line, size in block)
+    text_height = sum(size for _line, size in block)
+    padding = float(configured["box_padding"]) * font_size
+    box_w = text_width + 2 * padding
+    box_h = text_height + 2 * padding
+    anchor_x = position_x * width
+    if position_x <= 0.33:
+        left = anchor_x - padding
+    elif position_x >= 0.67:
+        left = anchor_x - text_width - padding
+    else:
+        left = anchor_x - box_w / 2
+    top = position_y * height - box_h / 2
+    radius = float(configured["box_radius"]) * min(box_w, box_h) / 2
+    colour = _ass_color(configured["box_color"], float(configured["box_opacity"]))
+    tags = (
+        "{\\an7\\pos(0,0)\\bord0\\shad0\\blur0"
+        f"\\1c&H{colour[4:]}&\\1a&H{colour[2:4]}&\\p1}}"
+    )
+    return tags + _rounded_rect_path(left, top, box_w, box_h, radius) + "{\\p0}"
+
+
+def _rounded_rect_path(left: float, top: float, w: float, h: float, r: float) -> str:
+    right, bottom = left + w, top + h
+    r = max(0.0, min(r, w / 2, h / 2))
+    k = r * 0.4477  # Distance of cubic control points from the corner for a quarter circle.
+
+    def p(x: float, y: float) -> str:
+        return f"{round(x)} {round(y)}"
+
+    if r < 0.5:
+        return f"m {p(left, top)} l {p(right, top)} {p(right, bottom)} {p(left, bottom)}"
+    return " ".join(
+        [
+            f"m {p(left + r, top)}",
+            f"l {p(right - r, top)}",
+            f"b {p(right - k, top)} {p(right, top + k)} {p(right, top + r)}",
+            f"l {p(right, bottom - r)}",
+            f"b {p(right, bottom - k)} {p(right - k, bottom)} {p(right - r, bottom)}",
+            f"l {p(left + r, bottom)}",
+            f"b {p(left + k, bottom)} {p(left, bottom - k)} {p(left, bottom - r)}",
+            f"l {p(left, top + r)}",
+            f"b {p(left, top + k)} {p(left + k, top)} {p(left + r, top)}",
+        ]
+    )
+
+
+_FONT_DIRS = (
+    Path("/System/Library/Fonts"),
+    Path("/System/Library/Fonts/Supplemental"),
+    Path("/Library/Fonts"),
+    Path.home() / "Library" / "Fonts",
+    Path("C:/Windows/Fonts"),
+    Path("/usr/share/fonts"),
+    Path.home() / ".fonts",
+)
+
+
+@lru_cache(maxsize=32)
+def _measuring_font(font_name: str, bold: bool):
+    """Load the subtitle font with Pillow for width measurement, or None if not found."""
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    wanted = [f"{font_name} bold", f"{font_name}bd", font_name] if bold else [font_name]
+    files = [
+        path
+        for directory in _FONT_DIRS
+        if directory.exists()
+        for path in directory.rglob("*")
+        if path.suffix.lower() in {".ttf", ".otf", ".ttc"}
+    ]
+    for name in wanted:
+        for path in files:
+            if path.stem.lower() == name.lower():
+                try:
+                    return ImageFont.truetype(str(path), 1000)
+                except OSError:
+                    continue
+    return None
+
+
+def _text_width(text: str, font_name: str, bold: bool, font_px: int) -> float:
+    font = _measuring_font(font_name, bold)
+    if font is None:
+        return len(text) * font_px * 0.5
+    ascent, descent = font.getmetrics()
+    # libass sizes fonts so that ascent + descent equals the ASS font size.
+    return font.getlength(text) * font_px / (ascent + descent)
 
 
 def source_language_subtitle_path(subtitle_path: Path) -> Path:
@@ -996,6 +1076,33 @@ def _render_quality_args(render_quality: str | None) -> tuple[list[str], str]:
     return ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"], audio_bitrate
 
 
+def _audio_map_args(
+    voice_input_index: int | None,
+    background_input_index: int | None,
+    audio_mix: dict[str, Any] | None,
+) -> list[str]:
+    """Filter and -map args choosing the output audio; the video stream is mapped by the caller."""
+    if voice_input_index is not None and background_input_index is not None:
+        graph = _audio_mix_filter(
+            voice_input_index=voice_input_index,
+            background_input_index=background_input_index,
+            audio_mix=audio_mix,
+        )
+    elif voice_input_index is not None:
+        if not audio_mix or audio_mix.get("dubbed_volume") is None:
+            return ["-map", f"{voice_input_index}:a:0"]
+        # Voice only (source audio off): the dub volume still applies.
+        gain = _mix_gain(audio_mix.get("dubbed_volume"), tts_volume())
+        graph = f"[{voice_input_index}:a]volume={gain:.3f},alimiter=limit=0.95[aout]"
+    elif background_input_index is not None:
+        graph = _background_audio_filter(background_input_index, audio_mix)
+    elif audio_mix and audio_mix.get("source_audio") is False:
+        return ["-an"]  # Dub and source audio both switched off: silent output.
+    else:
+        return ["-map", "0:a:0?"]
+    return ["-filter_complex", graph, "-map", "[aout]"]
+
+
 def _audio_mix_filter(
     voice_input_index: int = 1,
     background_input_index: int = 2,
@@ -1008,7 +1115,7 @@ def _audio_mix_filter(
     ducking = bool(settings.get("ducking", False))
     filters = [
         f"[{voice_input_index}:a]volume={voice_gain:.3f}[voice]",
-        f"[{background_input_index}:a]volume={bed_gain:.3f}[bed]",
+        f"[{background_input_index}:a]{_bed_volume(settings, bed_gain)}[bed]",
     ]
     if ducking:
         filters.append("[voice]asplit=2[voice_mix][voice_sidechain]")
@@ -1037,7 +1144,40 @@ def _background_audio_filter(
     bed_gain = _mix_gain(settings.get("original_volume"), background_volume())
     normalize = bool(settings.get("normalize", True))
     limiter = ",alimiter=limit=0.95" if normalize else ""
-    return f"[{background_input_index}:a]volume={bed_gain:.3f}{limiter}[aout]"
+    return f"[{background_input_index}:a]{_bed_volume(settings, bed_gain)}{limiter}[aout]"
+
+
+def _bed_volume(settings: dict[str, Any], bed_gain: float) -> str:
+    """Original-audio gain, optionally overridden inside time regions.
+
+    ``original_volume_regions`` holds non-overlapping ``{start, end, volume,
+    fade_in, fade_out}`` entries (volume in percent, up to 400) that replace the
+    base gain there, ramping linearly from/to the base gain over the fades.
+    """
+    terms = []
+    for region in settings.get("original_volume_regions") or []:
+        try:
+            start, end = float(region["start"]), float(region["end"])
+            gain = max(0.0, min(4.0, float(region["volume"]) / 100.0))
+            fade_in = max(0.0, float(region.get("fade_in") or 0))
+            fade_out = max(0.0, float(region.get("fade_out") or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        window = f"between(t,{start:.3f},{end:.3f})"
+        ramps = []
+        if fade_in > 0:
+            ramps.append(f"(t-{start:.3f})/{fade_in:.3f}")
+        if fade_out > 0:
+            ramps.append(f"({end:.3f}-t)/{fade_out:.3f}")
+        if ramps:
+            envelope = ramps[0] if len(ramps) == 1 else f"min({ramps[0]},{ramps[1]})"
+            window = f"{window}*clip({envelope},0,1)"
+        terms.append(f"+{gain - bed_gain:.3f}*{window}")
+    if not terms:
+        return f"volume={bed_gain:.3f}"
+    return f"volume='{bed_gain:.3f}{''.join(terms)}':eval=frame"
 
 
 def _mix_gain(value: Any, fallback: float) -> float:

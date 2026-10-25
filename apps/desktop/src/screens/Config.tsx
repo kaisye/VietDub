@@ -23,7 +23,10 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [nvidiaKey, setNvidiaKey] = useState("");
   const [groqKey, setGroqKey] = useState("");
-  const [clearingKey, setClearingKey] = useState<"nvidia" | "groq" | null>(null);
+  const [routerKey, setRouterKey] = useState("");
+  const [sonioxKey, setSonioxKey] = useState("");
+  const [openrouterKey, setOpenrouterKey] = useState("");
+  const [clearingKey, setClearingKey] = useState<"nvidia" | "groq" | "soniox" | null>(null);
   const [routerStatus, setRouterStatus] = useState<TranslationRouterStatus | null>(null);
   const [checkingRouter, setCheckingRouter] = useState(false);
   const [defaults, setDefaults] = useState(loadDefaults());
@@ -59,6 +62,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
   function patch<K extends keyof RuntimeSettings>(key: K, value: RuntimeSettings[K]) {
     setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
+
+  const usingOpenRouter = settings?.translation_provider === "openrouter";
 
   async function loadStorageUsage() {
     setStorageError("");
@@ -110,16 +115,20 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         tts_provider: settings.tts_provider,
         prefer_local_gpu: settings.prefer_local_gpu,
         prefer_existing_subtitles: settings.prefer_existing_subtitles,
-        translation_provider: "openai-compatible",
-        local_translation_base_url: settings.local_translation_base_url,
-        local_translation_model: settings.local_translation_model,
+        ...translationPayload(),
+        ytdlp_cookies_browser: settings.ytdlp_cookies_browser,
+        ytdlp_cookies_file: settings.ytdlp_cookies_file,
       };
       if (nvidiaKey.trim()) payload.nvidia_api_key = nvidiaKey.trim();
       if (groqKey.trim()) payload.groq_api_key = groqKey.trim();
+      if (sonioxKey.trim()) payload.soniox_api_key = sonioxKey.trim();
       const updated = await updateRuntimeSettings(payload);
       setSettings(updated);
       setNvidiaKey("");
       setGroqKey("");
+      setSonioxKey("");
+      setRouterKey("");
+      setOpenrouterKey("");
       setRouterStatus(await getTranslationRouterStatus().catch(() => null));
       saveDefaults(defaults);
       setSaved(true);
@@ -131,17 +140,28 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
     }
   }
 
+  function translationPayload(): Partial<RuntimeSettings> {
+    if (!settings) return {};
+    const payload: Partial<RuntimeSettings> = {
+      translation_provider: usingOpenRouter ? "openrouter" : "openai-compatible",
+      local_translation_base_url: settings.local_translation_base_url,
+      local_translation_model: settings.local_translation_model,
+      openrouter_model: settings.openrouter_model,
+    };
+    if (routerKey.trim()) payload.local_translation_api_key = routerKey.trim();
+    if (openrouterKey.trim()) payload.openrouter_api_key = openrouterKey.trim();
+    return payload;
+  }
+
   async function checkRouterConfiguration() {
     if (!settings) return;
     setCheckingRouter(true);
     setError("");
     try {
-      const payload: Partial<RuntimeSettings> = {
-        local_translation_base_url: settings.local_translation_base_url,
-        local_translation_model: settings.local_translation_model,
-      };
-      const updated = await updateRuntimeSettings(payload);
+      const updated = await updateRuntimeSettings(translationPayload());
       setSettings(updated);
+      setRouterKey("");
+      setOpenrouterKey("");
       setRouterStatus(await getTranslationRouterStatus());
     } catch (e) {
       setError(e instanceof Error ? e.message : t.error_load);
@@ -150,17 +170,16 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
     }
   }
 
-  async function clearSttKey(provider: "nvidia" | "groq") {
+  async function clearSttKey(provider: "nvidia" | "groq" | "soniox") {
     setClearingKey(provider);
     setError("");
     setSaved(false);
     try {
-      const updated = await updateRuntimeSettings(
-        provider === "nvidia" ? { nvidia_api_key: "" } : { groq_api_key: "" },
-      );
+      const updated = await updateRuntimeSettings({ [`${provider}_api_key`]: "" });
       setSettings(updated);
       if (provider === "nvidia") setNvidiaKey("");
-      else setGroqKey("");
+      else if (provider === "groq") setGroqKey("");
+      else setSonioxKey("");
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : t.error_save);
@@ -256,10 +275,123 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             </button>
           ) : null}
         </div>
+        <div className="field">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <label style={{ margin: 0 }}>Soniox API key</label>
+            <a
+              href="https://console.soniox.com"
+              onClick={(e) => { e.preventDefault(); void openUrl("https://console.soniox.com"); }}
+              style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
+            >
+              Đăng ký / Lấy key →
+            </a>
+          </div>
+          <input
+            type="password"
+            value={sonioxKey}
+            onChange={(e) => setSonioxKey(e.target.value)}
+            placeholder={settings.soniox_api_key_configured ? (lang === "vi" ? "Đã lưu key — nhập để thay" : "Key saved — type to replace") : "Soniox API key"}
+          />
+          <div className="hint">
+            {lang === "vi"
+              ? "Khi có key, Soniox (stt-async-v5) được dùng đầu tiên; NVIDIA và Groq là dự phòng."
+              : "When set, Soniox (stt-async-v5) runs first; NVIDIA and Groq become fallbacks."}
+          </div>
+          {settings.soniox_api_key_configured ? (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={clearingKey !== null}
+              onClick={() => void clearSttKey("soniox")}
+              style={{ marginTop: 8 }}
+            >
+              {clearingKey === "soniox"
+                ? (lang === "vi" ? "Đang xóa…" : "Removing…")
+                : (lang === "vi" ? "Xóa khóa Soniox đã lưu" : "Remove saved Soniox key")}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>{lang === "vi" ? "Tải video" : "Video download"}</h2>
+        <div className="field">
+          <label>{lang === "vi" ? "Dùng cookie YouTube từ trình duyệt" : "Use YouTube cookies from browser"}</label>
+          <select
+            value={settings.ytdlp_cookies_browser}
+            onChange={(e) => patch("ytdlp_cookies_browser", e.target.value)}
+          >
+            <option value="">{lang === "vi" ? "Không dùng" : "None"}</option>
+            <option value="chrome">Chrome</option>
+            <option value="brave">Brave</option>
+            <option value="safari">Safari</option>
+            <option value="firefox">Firefox</option>
+            <option value="edge">Edge</option>
+          </select>
+          <div className="hint">
+            {lang === "vi"
+              ? "Bật khi YouTube báo \"Sign in to confirm you're not a bot\". Chọn trình duyệt đang đăng nhập YouTube. Trên macOS, lần đầu sẽ hiện hộp thoại Keychain — chọn \"Luôn cho phép\". Safari cần cấp Full Disk Access cho Terminal."
+              : "Enable when YouTube says \"Sign in to confirm you're not a bot\". Pick a browser that is signed in to YouTube. On macOS, allow the Keychain prompt the first time. Safari needs Full Disk Access for Terminal."}
+          </div>
+        </div>
+        <div className="field">
+          <label>{lang === "vi" ? "Hoặc file cookies.txt (ưu tiên hơn trình duyệt)" : "Or a cookies.txt file (takes priority)"}</label>
+          <input
+            type="text"
+            value={settings.ytdlp_cookies_file}
+            onChange={(e) => patch("ytdlp_cookies_file", e.target.value)}
+            placeholder="/Users/.../cookies.txt"
+          />
+        </div>
       </div>
 
       <div className="card">
         <h2>{t.translation_title}</h2>
+        <div className="field">
+          <label>{lang === "vi" ? "Nhà cung cấp dịch" : "Translation provider"}</label>
+          <select
+            value={usingOpenRouter ? "openrouter" : "openai-compatible"}
+            onChange={(e) => {
+              patch("translation_provider", e.target.value);
+              setRouterStatus(null);
+            }}
+          >
+            <option value="openai-compatible">9router (cục bộ)</option>
+            <option value="openrouter">OpenRouter (cloud)</option>
+          </select>
+        </div>
+        {usingOpenRouter ? (
+          <>
+            <div className="field">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <label style={{ margin: 0 }}>OpenRouter API key</label>
+                <a
+                  href="https://openrouter.ai/keys"
+                  onClick={(e) => { e.preventDefault(); void openUrl("https://openrouter.ai/keys"); }}
+                  style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
+                >
+                  Đăng ký / Lấy key →
+                </a>
+              </div>
+              <input
+                type="password"
+                value={openrouterKey}
+                onChange={(e) => setOpenrouterKey(e.target.value)}
+                placeholder={settings.openrouter_api_key_configured ? (lang === "vi" ? "Đã lưu key — nhập để thay" : "Key saved — type to replace") : "sk-or-..."}
+              />
+            </div>
+            <div className="field">
+              <label>{t.translation_model}</label>
+              <input
+                type="text"
+                value={settings.openrouter_model}
+                onChange={(e) => patch("openrouter_model", e.target.value)}
+                placeholder="qwen/qwen3.7-flash"
+              />
+            </div>
+          </>
+        ) : (
+        <>
         <NineRouterSetup
           onReady={() => {
             patch("local_translation_base_url", "http://localhost:20128/v1");
@@ -273,6 +405,16 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             onChange={(e) => patch("local_translation_base_url", e.target.value)}
             placeholder="http://127.0.0.1:20128/v1"
           />
+        </div>
+        <div className="field">
+          <label>API key 9router</label>
+          <input
+            type="password"
+            value={routerKey}
+            onChange={(e) => setRouterKey(e.target.value)}
+            placeholder={settings.local_translation_api_key_configured ? "Đã lưu key — nhập để thay" : "sk-... (lấy trong dashboard 9router)"}
+          />
+          <div className="hint">Chỉ cần khi 9router bật "Require API key". Sao chép key trong dashboard 9router.</div>
         </div>
         <div className="field">
           <label>{t.translation_model}</label>
@@ -295,6 +437,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             />
           )}
         </div>
+        </>
+        )}
         {routerStatus ? (
           <div className={`banner ${routerStatus.ready ? "ok" : "err"}`} style={{ marginBottom: 12 }}>
             {routerStatus.message}
@@ -304,9 +448,11 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
           <button className="btn" disabled={checkingRouter} onClick={() => void checkRouterConfiguration()}>
             {checkingRouter ? "Đang kiểm tra…" : "Lưu & kiểm tra kết nối"}
           </button>
-          <button className="btn" onClick={() => void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`)}>
-            Mở dashboard 9router
-          </button>
+          {usingOpenRouter ? null : (
+            <button className="btn" onClick={() => void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`)}>
+              Mở dashboard 9router
+            </button>
+          )}
         </div>
       </div>
 

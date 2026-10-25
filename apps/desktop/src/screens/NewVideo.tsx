@@ -246,7 +246,7 @@ export default function NewVideoScreen({ onStarted }: { onStarted: (jobId: strin
       if (run) {
         const router = await getTranslationRouterStatus();
         if (!router.ready) {
-          if (router.running) void openUrl("http://127.0.0.1:20128/dashboard");
+          if (router.running && /9router/i.test(router.message)) void openUrl("http://127.0.0.1:20128/dashboard");
           throw new Error(router.message);
         }
       }

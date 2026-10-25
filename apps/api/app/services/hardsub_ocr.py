@@ -329,7 +329,13 @@ def _load_ocr_engine(source_language: str | None):
             "Install it with `pip install -r apps/api/requirements.txt`, then retry the job."
         ) from exc
 
-    kwargs: dict[str, str] = {}
+    # RapidOCR's default (limit_type=min, 736) upscales the short side of the
+    # wide subtitle strip to 736 px, so detection dominated at ~1.0 s/frame.
+    # 480 halved total OCR time on a 720p hard-sub video with no lost captions.
+    kwargs: dict[str, str | int] = {
+        "det_limit_type": "min",
+        "det_limit_side_len": max(32, _env_int("AETHER_OCR_DET_LIMIT_SIDE_LEN", 480)),
+    }
     for env_name, kwarg in (
         ("AETHER_OCR_DET_MODEL", "det_model_path"),
         ("AETHER_OCR_REC_MODEL", "rec_model_path"),

@@ -414,12 +414,10 @@ def _thread_count() -> int:
     # ZeroTTS's small per-frame ONNX graphs spend more time coordinating ORT
     # workers than doing useful work when all 8 M1 cores are enabled. On an
     # M1 Air, 2 threads measured ~2.4 s for 4.4 s audio versus ~6 s at 8.
-    if (
-        sys.platform == "darwin"
-        and platform.machine() == "arm64"
-        and (os.cpu_count() or 0) <= 8
-    ):
-        return 2
+    # On a 10-core M1 Max the same sentence took 3.40 s at 2, 3.04 s at 4 and
+    # 4.36 s at 8 threads, so larger Apple Silicon chips cap at 4.
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return 2 if (os.cpu_count() or 0) <= 8 else 4
     return max(1, min(8, os.cpu_count() or 4))
 
 

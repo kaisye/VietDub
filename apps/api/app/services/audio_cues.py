@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio_bed import background_volume
+from .ffmpeg_compat import complex_filter_file_args
 from .renderer import render_video
 from .speech_rate import SpeechRateProfile
 from .storage import ensure_storage
@@ -374,8 +375,7 @@ def mix_audio_cues(job_id: str, manifest: dict[str, Any]) -> Path:
     filter_file.write_text(_manual_timeline_filter(cue_inputs, duration), encoding="utf-8")
     command.extend(
         [
-            "-filter_complex_script",
-            str(filter_file),
+            *complex_filter_file_args(filter_file),
             "-map",
             "[aout]",
             "-c:a",

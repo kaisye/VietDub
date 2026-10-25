@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import difflib
 import json
+import logging
 import math
 import os
 import re
@@ -17,6 +19,8 @@ from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_translation_hint
 from .storage import ensure_storage
 from .subtitle import SourceTranscriptArtifacts
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -236,8 +240,13 @@ def _translate_contextual_segments(
 def _contextual_translation_batches(
     cues: list[IndexedSubtitleCue],
 ) -> list[list[IndexedSubtitleCue]]:
-    max_cues = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CUES") or 150
-    max_chars = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CHARS") or 5000
+    # Small "flash" cloud models start echoing the source text back once a
+    # request grows long, so OpenRouter gets much smaller batches by default.
+    openrouter = _translation_provider() == "openrouter"
+    max_cues = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CUES") or (40 if openrouter else 150)
+    max_chars = _optional_positive_int("AETHER_SOURCE_FIRST_TRANSLATION_BATCH_CHARS") or (
+        1500 if openrouter else 5000
+    )
     batches: list[list[IndexedSubtitleCue]] = []
     current: list[IndexedSubtitleCue] = []
     current_chars = 0
@@ -346,9 +355,11 @@ def _translate_contextual_batch_resilient(
     next_context: list[IndexedSubtitleCue],
     source_needs_review: bool,
     translation_profile: dict[str, Any] | None,
+    *,
+    _attempt: int = 0,
 ) -> dict[str, str]:
     try:
-        return _translate_contextual_batch(
+        translated = _translate_contextual_batch(
             cues,
             source_language,
             target_language,
@@ -357,6 +368,49 @@ def _translate_contextual_batch_resilient(
             next_context,
             source_needs_review,
             translation_profile,
+        )
+        untranslated = [
+            cue for cue in cues if _has_untranslated_cjk(translated[cue.index], target_language)
+        ]
+        if not untranslated:
+            return translated
+        if len(untranslated) < len(cues):
+            # Re-send only the segments the model echoed back in the source
+            # script; a smaller request is far less likely to be copied again.
+            logger.warning(
+                "Translation left source-script text in %d/%d segments; retrying them.",
+                len(untranslated),
+                len(cues),
+            )
+            retried = _translate_contextual_batch_resilient(
+                untranslated,
+                source_language,
+                target_language,
+                speech_rate,
+                previous_context,
+                next_context,
+                source_needs_review,
+                translation_profile,
+                _attempt=_attempt,
+            )
+            return {**translated, **retried}
+        if len(cues) > 1:
+            raise RuntimeError("Translation returned source-script text for every segment in the batch.")
+        if _attempt < 2:
+            return _translate_contextual_batch_resilient(
+                cues,
+                source_language,
+                target_language,
+                speech_rate,
+                previous_context,
+                next_context,
+                source_needs_review,
+                translation_profile,
+                _attempt=_attempt + 1,
+            )
+        raise RuntimeError(
+            f"Bản dịch đoạn {cues[0].index} vẫn còn chữ gốc (chưa dịch) sau 3 lần thử: "
+            f"\"{translated[cues[0].index][:120]}\". Hãy đổi model dịch rồi bấm Thử lại."
         )
     except Exception as exc:
         if len(cues) <= 1:
@@ -420,6 +474,7 @@ def _translate_contextual_batch(
         f"{_core_translation_rules(source_language, target_language, translation_profile)}"
         f"{sound_tag_rule}"
         "Return one item per input ID. Do not create timestamps or change IDs.\n"
+        f"{_target_script_rule(target_language)}"
         f"{review_rule}"
         f"{_speech_rate_prompt_section(speech_rate)}"
         f"{_contextual_output_limit(target_language)}"
@@ -888,6 +943,36 @@ def _time_semantic_segments(
     if not source_cues or not segments:
         return []
 
+    aligned_offsets = _align_semantic_content_offsets(source_cues, segments)
+    if aligned_offsets is not None:
+        source_keys = [_semantic_content_key(cue.text) for cue in source_cues]
+        timed: list[IndexedSubtitleCue] = []
+        for index, (segment, (start_offset, end_offset)) in enumerate(
+            zip(segments, aligned_offsets),
+            start=1,
+        ):
+            start = _time_at_semantic_offset(
+                source_cues,
+                source_keys,
+                start_offset,
+                prefer_next_cue=True,
+            )
+            end = _time_at_semantic_offset(
+                source_cues,
+                source_keys,
+                end_offset,
+                prefer_next_cue=False,
+            )
+            timed.append(
+                IndexedSubtitleCue(
+                    index=str(index),
+                    start=start,
+                    end=max(start + 0.2, end),
+                    text=segment,
+                )
+            )
+        return timed
+
     cue_units = [max(1, _word_count(cue.text)) for cue in source_cues]
     segment_units = [max(1, _word_count(segment)) for segment in segments]
     source_total = sum(cue_units)
@@ -911,6 +996,92 @@ def _time_semantic_segments(
             )
         )
     return timed
+
+
+def _align_semantic_content_offsets(
+    source_cues: list[IndexedSubtitleCue],
+    segments: list[str],
+) -> list[tuple[float, float]] | None:
+    """Map reconstructed segment boundaries back to the original OCR text.
+
+    Semantic reconstruction fixes OCR text and merges fragments, but it must not
+    replace observed cue starts with a batch-wide proportional timeline. Match
+    the reconstructed source-language text to the original OCR character stream
+    so boundaries land on the source cues and gaps between captions survive.
+    """
+    source_keys = [_semantic_content_key(cue.text) for cue in source_cues]
+    segment_keys = [_semantic_content_key(segment) for segment in segments]
+    if any(not key for key in source_keys) or any(not key for key in segment_keys):
+        return None
+
+    source_text = "".join(source_keys)
+    reconstructed_text = "".join(segment_keys)
+    if not source_text or not reconstructed_text:
+        return None
+
+    matcher = difflib.SequenceMatcher(None, reconstructed_text, source_text, autojunk=False)
+    if matcher.ratio() < 0.55:
+        return None
+
+    matching_blocks = matcher.get_matching_blocks()
+
+    def source_offset(reconstructed_offset: int) -> float:
+        previous_reconstructed = 0
+        previous_source = 0
+        for block in matching_blocks:
+            block_reconstructed = block.a
+            block_source = block.b
+            block_end = block_reconstructed + block.size
+            if reconstructed_offset <= block_end:
+                if reconstructed_offset >= block_reconstructed:
+                    return float(
+                        block_source
+                        + min(reconstructed_offset - block_reconstructed, block.size)
+                    )
+
+                reconstructed_gap = block_reconstructed - previous_reconstructed
+                source_gap = block_source - previous_source
+                if reconstructed_gap <= 0:
+                    return float(block_source)
+                progress = (reconstructed_offset - previous_reconstructed) / reconstructed_gap
+                return previous_source + progress * source_gap
+
+            previous_reconstructed = block_end
+            previous_source = block_source + block.size
+        return float(len(source_text))
+
+    offsets: list[tuple[float, float]] = []
+    cursor = 0
+    for key in segment_keys:
+        start = source_offset(cursor)
+        cursor += len(key)
+        end = source_offset(cursor)
+        if end < start:
+            return None
+        offsets.append((start, end))
+    return offsets
+
+
+def _time_at_semantic_offset(
+    cues: list[IndexedSubtitleCue],
+    cue_keys: list[str],
+    offset: float,
+    *,
+    prefer_next_cue: bool,
+) -> float:
+    cursor = 0.0
+    for index, (cue, key) in enumerate(zip(cues, cue_keys)):
+        units = max(1, len(key))
+        cue_end_offset = cursor + units
+        if offset < cue_end_offset:
+            ratio = max(0.0, offset - cursor) / units
+            return cue.start + (cue.end - cue.start) * ratio
+        if offset == cue_end_offset:
+            if prefer_next_cue and index + 1 < len(cues):
+                return cues[index + 1].start
+            return cue.end
+        cursor = cue_end_offset
+    return cues[-1].end
 
 
 def _time_at_content_offset(
@@ -1027,10 +1198,46 @@ _ROUTER_UNREACHABLE_MESSAGE = (
     "rồi bấm Thử lại."
 )
 _ROUTER_UNCONFIGURED_MESSAGE = (
-    "9router đang chạy nhưng model dịch chưa gọi được provider. 9router không cần API key "
-    "từ VietDub; hãy mở dashboard 127.0.0.1:20128, đăng nhập/kết nối một provider và "
-    "gán provider đó cho model 'translate', rồi bấm Kiểm tra cấu hình & Thử lại."
+    "9router đang chạy nhưng model dịch chưa gọi được provider. Hãy mở dashboard "
+    "127.0.0.1:20128, đăng nhập/kết nối một provider và gán provider đó cho model dịch "
+    "đang chọn, rồi bấm Lưu & kiểm tra kết nối."
 )
+_ROUTER_API_KEY_MISSING_MESSAGE = (
+    "9router đang bật yêu cầu API key nhưng VietDub chưa có key. Mở dashboard 9router "
+    "(127.0.0.1:20128), sao chép API key rồi dán vào ô \"API key 9router\" trong Cài đặt, "
+    "sau đó bấm Lưu & kiểm tra kết nối."
+)
+_ROUTER_API_KEY_INVALID_MESSAGE = (
+    "9router từ chối API key đã lưu trong VietDub. Mở dashboard 9router (127.0.0.1:20128), "
+    "sao chép lại API key đúng và dán vào ô \"API key 9router\" trong Cài đặt, "
+    "sau đó bấm Lưu & kiểm tra kết nối."
+)
+
+
+def _router_auth_error_message(response: httpx.Response) -> str:
+    """Tell 9router's own API-key rejection apart from an unauthenticated provider."""
+    code = ""
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            code = str(error.get("code") or "")
+    except (ValueError, TypeError):
+        pass
+    detail = _router_error_detail(response).lower()
+    if code == "invalid_api_key" or "api key" in detail:
+        if _local_translation_api_key():
+            return _ROUTER_API_KEY_INVALID_MESSAGE
+        return _ROUTER_API_KEY_MISSING_MESSAGE
+    return _ROUTER_UNCONFIGURED_MESSAGE
+
+
+def _local_translation_headers() -> dict[str, str]:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    api_key = _local_translation_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
 
 
 def _request_translation_completion(model: str, system_prompt: str, user_prompt: str) -> str:
@@ -1040,14 +1247,19 @@ def _request_translation_completion(model: str, system_prompt: str, user_prompt:
     configured we raise a clear, actionable error instead of silently falling
     back to a cloud API — the desktop shell recognises the "9router" marker and
     brings the router up / opens its dashboard.
+
+    When the user picks OpenRouter instead, the request goes to the OpenRouter
+    cloud API; its errors deliberately avoid the "9router" marker.
     """
+    if _translation_provider() == "openrouter":
+        return _request_openrouter_completion(model, system_prompt, user_prompt)
     try:
         response = _request_openai_compatible_translation(model, system_prompt, user_prompt)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
         raise RuntimeError(_ROUTER_UNREACHABLE_MESSAGE) from exc
 
     if response.status_code in (401, 403):
-        raise RuntimeError(_ROUTER_UNCONFIGURED_MESSAGE)
+        raise RuntimeError(_router_auth_error_message(response))
     if response.status_code == 404:
         raise RuntimeError(
             f"9router không tìm thấy model dịch '{model}'. Mở dashboard 9router "
@@ -1065,11 +1277,133 @@ def _request_translation_completion(model: str, system_prompt: str, user_prompt:
     return _extract_chat_completion_content(response.json())
 
 
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_OPENROUTER_MODEL = "qwen/qwen3.7-flash"
+
+
+def _openrouter_api_key() -> str | None:
+    settings = get_runtime_settings()
+    key = (getattr(settings, "openrouter_api_key", "") or os.getenv("OPENROUTER_API_KEY") or "").strip()
+    return key or None
+
+
+def _openrouter_model() -> str:
+    settings = get_runtime_settings()
+    return (getattr(settings, "openrouter_model", "") or os.getenv("AETHER_OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL).strip()
+
+
+def _openrouter_post(model: str, messages: list[dict[str, str]], max_tokens: int, timeout: int) -> httpx.Response:
+    api_key = _openrouter_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "Chưa có API key OpenRouter. Vào Cài đặt > Dịch, dán key từ "
+            "openrouter.ai/keys rồi bấm Lưu & kiểm tra kết nối."
+        )
+    body: dict[str, object] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": _optional_float("AETHER_TRANSLATION_TEMPERATURE", 0.2, 0.0, 2.0),
+        "top_p": _optional_float("AETHER_TRANSLATION_TOP_P", 0.95, 0.0, 1.0),
+        "stream": False,
+    }
+    # Qwen Flash models reason by default, which makes subtitle translation
+    # slower and costlier without a visible quality gain. Opt back in with
+    # AETHER_OPENROUTER_REASONING=1.
+    if os.getenv("AETHER_OPENROUTER_REASONING", "0").strip().lower() in {"1", "true", "on", "yes"}:
+        body["reasoning"] = {"enabled": True, "exclude": True}
+    else:
+        body["reasoning"] = {"enabled": False}
+    return httpx.post(
+        OPENROUTER_CHAT_URL,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://github.com/kaisye/VietDub",
+            "X-Title": "VietDub",
+        },
+        json=body,
+        timeout=timeout,
+    )
+
+
+def _openrouter_error_message(model: str, response: httpx.Response) -> str:
+    detail = _router_error_detail(response)
+    if response.status_code == 401:
+        return f"OpenRouter từ chối API key (HTTP 401): {detail}. Kiểm tra lại key trong Cài đặt > Dịch."
+    if response.status_code == 402:
+        return f"Tài khoản OpenRouter hết credit (HTTP 402): {detail}. Nạp thêm credit tại openrouter.ai rồi Thử lại."
+    if response.status_code == 404:
+        return f"OpenRouter không tìm thấy model '{model}': {detail}. Kiểm tra tên model trong Cài đặt > Dịch."
+    if response.status_code == 429:
+        return f"OpenRouter đang giới hạn tốc độ (HTTP 429): {detail}. Đợi một lát rồi Thử lại."
+    return f"OpenRouter lỗi HTTP {response.status_code} với model '{model}': {detail}"
+
+
+def _request_openrouter_completion(model: str, system_prompt: str, user_prompt: str) -> str:
+    try:
+        response = _openrouter_post(
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=_optional_positive_int("AETHER_TRANSLATION_MAX_TOKENS") or 8192,
+            timeout=_optional_positive_int("AETHER_TRANSLATION_TIMEOUT_SECONDS") or 600,
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+        raise RuntimeError(f"Không kết nối được OpenRouter (openrouter.ai): {exc}. Kiểm tra mạng rồi Thử lại.") from exc
+    if not response.is_success:
+        raise RuntimeError(_openrouter_error_message(model, response))
+    payload = response.json()
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(f"OpenRouter trả lỗi cho model '{model}': {_router_error_detail(response)}")
+    return _extract_chat_completion_content(payload)
+
+
+def openrouter_status() -> dict[str, object]:
+    """Probe OpenRouter with a tiny real completion for the configured model."""
+    model = _openrouter_model()
+    base: dict[str, object] = {"running": True, "configured_model": model, "models": [model]}
+    if not _openrouter_api_key():
+        return {
+            **base, "ready": False, "state": "provider_not_configured",
+            "message": "Chưa có API key OpenRouter. Dán key từ openrouter.ai/keys rồi bấm Lưu & kiểm tra kết nối.",
+        }
+    try:
+        probe = _openrouter_post(model, [{"role": "user", "content": "Reply with OK."}], max_tokens=16, timeout=60)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+        return {
+            **base, "ready": False, "running": False, "state": "unreachable",
+            "message": f"Không kết nối được OpenRouter: {exc}",
+        }
+    if not probe.is_success:
+        return {
+            **base, "ready": False,
+            "state": "provider_not_configured" if probe.status_code in (401, 402) else "probe_failed",
+            "message": _openrouter_error_message(model, probe),
+        }
+    try:
+        _extract_chat_completion_content(probe.json())
+    except (ValueError, RuntimeError):
+        return {
+            **base, "ready": False, "state": "invalid_response",
+            "message": f"OpenRouter model '{model}' phản hồi sai định dạng. Hãy chọn model khác.",
+        }
+    return {
+        **base, "ready": True, "state": "ready",
+        "message": f"OpenRouter đã dịch thử thành công với model '{model}'.",
+    }
+
+
 def translation_router_status() -> dict[str, object]:
-    """Verify that 9router has a provider and can serve the selected model."""
+    """Verify that the selected translation backend can serve the chosen model."""
+    if _translation_provider() == "openrouter":
+        return openrouter_status()
     settings = get_runtime_settings()
     model = settings.local_translation_model.strip()
-    headers = {"Accept": "application/json"}
+    headers = _local_translation_headers()
 
     try:
         response = httpx.get(_local_translation_models_url(), headers=headers, timeout=10)
@@ -1084,7 +1418,7 @@ def translation_router_status() -> dict[str, object]:
         return {
             "ready": False, "running": True,
             "state": "provider_not_configured",
-            "message": "9router đang chạy nhưng chưa có provider hoạt động. Hãy đăng nhập hoặc kết nối provider trong dashboard.",
+            "message": _router_auth_error_message(response),
             "configured_model": model, "models": [],
         }
 
@@ -1132,7 +1466,7 @@ def translation_router_status() -> dict[str, object]:
     if probe.status_code in (401, 403):
         return {
             "ready": False, "running": True, "state": "provider_not_configured",
-            "message": _ROUTER_UNCONFIGURED_MESSAGE,
+            "message": _router_auth_error_message(probe),
             "configured_model": model, "models": models,
         }
     if not probe.is_success:
@@ -1163,7 +1497,7 @@ def _probe_translation_router(model: str) -> httpx.Response:
     """Send the smallest useful request; model listing alone is a false positive."""
     return httpx.post(
         _local_translation_chat_url(),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers=_local_translation_headers(),
         json={
             "model": model,
             "messages": [{"role": "user", "content": "Reply with OK."}],
@@ -1195,17 +1529,9 @@ def _router_error_detail(response: httpx.Response) -> str:
 
 
 def _request_openai_compatible_translation(model: str, system_prompt: str, user_prompt: str) -> httpx.Response:
-    api_key = _local_translation_api_key()
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
     return httpx.post(
         _local_translation_chat_url(),
-        headers=headers,
+        headers=_local_translation_headers(),
         json={
             "model": model,
             "messages": [
@@ -1533,13 +1859,19 @@ def _split_srt_blocks(srt_text: str) -> list[str]:
 
 
 def _translation_provider() -> str:
-    """Translation always uses the local 9router endpoint; NVIDIA NIM was removed
-    as a translation backend. Any legacy ``nvidia`` value persisted in
-    runtime-settings.json is ignored."""
+    """Translation uses the local 9router endpoint unless OpenRouter is chosen.
+
+    NVIDIA NIM was removed as a translation backend; any legacy ``nvidia`` value
+    persisted in runtime-settings.json falls back to 9router."""
+    provider = str(getattr(get_runtime_settings(), "translation_provider", "") or "")
+    if provider.strip().lower() == "openrouter":
+        return "openrouter"
     return "openai-compatible"
 
 
 def _translation_model() -> str:
+    if _translation_provider() == "openrouter":
+        return _openrouter_model()
     settings = get_runtime_settings()
     return (
         settings.local_translation_model
@@ -1588,6 +1920,30 @@ def _same_language(source_language: str | None, target_language: str | None) -> 
     source = _language_key(source_language)
     target = _language_key(target_language)
     return bool(source and target and source == target)
+
+
+_CJK_SCRIPT_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+_CJK_TARGET_KEYS = {"zh", "ja", "ko", "chinese", "japanese", "korean", "mandarin", "cantonese"}
+
+
+def _has_untranslated_cjk(text: str, target_language: str | None) -> bool:
+    """True when a non-CJK target still contains Chinese/Japanese/Korean script.
+
+    Any such character in e.g. a Vietnamese line is source text the model failed
+    to translate; a Vietnamese TTS voice cannot read it and stalls on it.
+    """
+    if _language_key(target_language) in _CJK_TARGET_KEYS:
+        return False
+    return bool(_CJK_SCRIPT_PATTERN.search(text or ""))
+
+
+def _target_script_rule(target_language: str | None) -> str:
+    if _language_key(target_language) in _CJK_TARGET_KEYS:
+        return ""
+    return (
+        "Every text must be fully written in the target language. Never copy or keep any "
+        "Chinese, Japanese or Korean characters; transliterate names instead.\n"
+    )
 
 
 def _language_key(language: str | None) -> str:

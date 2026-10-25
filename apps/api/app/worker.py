@@ -14,6 +14,7 @@ from .database import SessionLocal
 from .models import MediaJob, MediaJobStatus
 from .services.audio_cues import attach_background_audio, create_audio_cue_manifest
 from .services.audio_bed import prepare_background_audio
+from .services import editor
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
 from .services.renderer import (
@@ -43,6 +44,7 @@ from .services.subtitle import (
     trim_subtitle_to_clip,
 )
 from .services.translator import (
+    _has_untranslated_cjk,
     normalize_subtitle_for_translation,
     translate_subtitle,
     translated_segments_path,
@@ -67,6 +69,8 @@ def _default_step_detail(status: "MediaJobStatus") -> str:
         MediaJobStatus.rendering: "Đang ghép video & âm thanh…",
     }.get(status, "")
 
+
+_EDITOR_RENDERS: set[str] = set()
 
 RUNNING_STATUSES = {
     MediaJobStatus.queued,
@@ -116,6 +120,30 @@ def cancel_job(db: Session, job: MediaJob) -> MediaJob:
     db.commit()
     db.refresh(job)
     return job
+
+
+def fail_interrupted_jobs(db: Session) -> int:
+    """Mark jobs left in a running state by a previous backend process as failed.
+
+    Workers are in-process threads, so a fresh process (app restart, or a dev
+    ``--reload`` triggered by a code edit) has no thread behind any running job.
+    Without this the job stays "running" forever and Retry refuses to resume it.
+    """
+    jobs = db.query(MediaJob).filter(MediaJob.status.in_(RUNNING_STATUSES)).all()
+    for job in jobs:
+        job.status = MediaJobStatus.failed
+        job.error_message = (
+            "Backend đã khởi động lại khi job đang chạy nên tiến trình bị dừng. "
+            "Bấm Thử lại để chạy tiếp từ checkpoint gần nhất."
+        )
+        job.logs = append_log(
+            job.logs, f"Interrupted by a backend restart during '{job.current_step}'."
+        )
+        job.updated_at = datetime.utcnow()
+        _persist_job_log(job)
+    if jobs:
+        db.commit()
+    return len(jobs)
 
 
 def retry_job(db: Session, job: MediaJob) -> MediaJob:
@@ -724,26 +752,7 @@ def _continue_after_translation(
         70,
         "Generating voice audio" if voice_enabled else "Voice generation disabled",
     )
-    voice_overrides = VoiceOverrides(
-        mode=configuration.voice.mode if configuration else job.voice_mode,
-        instruction=configuration.voice.instruction
-        if configuration
-        else job.voice_instruction,
-        reference_audio_url=(
-            configuration.voice.reference.url
-            if configuration
-            else job.voice_reference_audio_url
-        ),
-        reference_audio_path=configuration.voice.reference.path
-        if configuration
-        else "",
-        reference_text=(
-            configuration.voice.reference.text
-            or configuration.voice.reference.text_path
-            if configuration
-            else job.voice_reference_text
-        ),
-    )
+    voice_overrides = _job_voice_overrides(job, configuration)
     target_language = (
         configuration.languages.target if configuration else job.target_language
     )
@@ -1028,6 +1037,12 @@ def _start_download_resume(job_id: str, raw_video_path: Path) -> None:
     ).start()
 
 
+def _job_target_language(job_id: str) -> str | None:
+    with SessionLocal() as db:
+        job = db.get(MediaJob, job_id)
+        return job.target_language if job else None
+
+
 def _retry_checkpoint(job_id: str) -> dict[str, object]:
     root = ensure_storage()
     video_suffixes = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
@@ -1043,11 +1058,16 @@ def _retry_checkpoint(job_id: str) -> dict[str, object]:
     if not raw_videos:
         return {"kind": "start", "label": "start"}
 
+    target_language = _job_target_language(job_id)
     translated_subtitles = sorted(
         (
             path
             for path in (root / "subtitles").glob(f"{job_id}*.render.srt")
-            if path.is_file() and path.stat().st_size > 0
+            if path.is_file()
+            and path.stat().st_size > 0
+            # A translation that still carries source-script text is not a
+            # usable checkpoint: resuming from it would voice untranslated lines.
+            and not _has_untranslated_cjk(path.read_text(encoding="utf-8", errors="ignore"), target_language)
         ),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
@@ -1228,6 +1248,116 @@ def _job_configuration(job: MediaJob) -> ProductionConfiguration | None:
         )
     except Exception as exc:
         raise RuntimeError(f"Job configuration snapshot is invalid: {exc}") from exc
+
+
+def _job_voice_overrides(
+    job: MediaJob, configuration: ProductionConfiguration | None
+) -> VoiceOverrides:
+    return VoiceOverrides(
+        mode=configuration.voice.mode if configuration else job.voice_mode,
+        instruction=configuration.voice.instruction
+        if configuration
+        else job.voice_instruction,
+        reference_audio_url=(
+            configuration.voice.reference.url
+            if configuration
+            else job.voice_reference_audio_url
+        ),
+        reference_audio_path=configuration.voice.reference.path
+        if configuration
+        else "",
+        reference_text=(
+            configuration.voice.reference.text
+            or configuration.voice.reference.text_path
+            if configuration
+            else job.voice_reference_text
+        ),
+    )
+
+
+def editor_voice_settings(job: MediaJob) -> dict[str, object]:
+    """Voice parameters for re-voicing single editor segments like the pipeline did."""
+    configuration = _job_configuration(job)
+    return {
+        "voice": configuration.voice.voice_id if configuration else job.voice,
+        "provider": configuration.voice.provider if configuration else "",
+        "voice_rate": _configuration_voice_rate(configuration)
+        if configuration
+        else job.voice_rate,
+        "target_language": configuration.languages.target
+        if configuration
+        else job.target_language,
+        "voice_overrides": _job_voice_overrides(job, configuration),
+    }
+
+
+def start_editor_render(job: MediaJob) -> None:
+    """Render the editor workspace in the background without touching the job status.
+
+    The job keeps its current output until the edited render succeeds, so a
+    failed edit render never breaks a finished job.
+    """
+    if job.status in RUNNING_STATUSES:
+        raise ValueError("Job đang chạy, chờ xong rồi mới render bản chỉnh sửa.")
+    with editor.workspace_lock(job.id):
+        workspace = editor.load_workspace(job.id)
+        if not workspace:
+            raise ValueError("Chưa có workspace để render.")
+        if workspace["render"].get("status") == "running" and job.id in _EDITOR_RENDERS:
+            raise ValueError("Đang render bản chỉnh sửa.")
+        workspace["render"] = {
+            "status": "running",
+            "started_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        editor.save_workspace(workspace)
+    _EDITOR_RENDERS.add(job.id)
+    threading.Thread(target=_run_editor_render, args=(job.id,), daemon=True).start()
+
+
+def editor_render_alive(job_id: str) -> bool:
+    return job_id in _EDITOR_RENDERS
+
+
+def _run_editor_render(job_id: str) -> None:
+    try:
+        with SessionLocal() as db:
+            job = db.get(MediaJob, job_id)
+            configuration = _job_configuration(job)
+            config_dict = configuration.model_dump(mode="json") if configuration else None
+            burn = bool(getattr(job, "burn_subtitles", True)) and (
+                configuration.subtitle.style_id != NO_SUBTITLE_STYLE_ID
+                if configuration
+                else True
+            )
+            with editor.workspace_lock(job_id):
+                workspace = editor.load_workspace(job_id)
+            try:
+                output = editor.render_workspace(
+                    workspace,
+                    config_dict,
+                    render_quality=configuration.output.render_quality
+                    if configuration
+                    else job.render_quality,
+                    burn_subtitles=burn,
+                )
+                render_state = {"status": "done", "output_url": f"/storage/rendered-outputs/{output.name}"}
+                job.output_url = render_state["output_url"]
+                job.logs = append_log(job.logs, f"Editor render completed: {output.name}")
+            except Exception as exc:
+                render_state = {"status": "failed", "error": str(exc)[-1500:]}
+                job.logs = append_log(job.logs, f"Editor render failed: {exc}")
+            job.updated_at = datetime.utcnow()
+            _persist_job_log(job)
+            db.commit()
+            with editor.workspace_lock(job_id):
+                workspace = editor.load_workspace(job_id)
+                workspace["render"] = {
+                    **render_state,
+                    "finished_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                }
+                editor.save_workspace(workspace)
+    finally:
+        _EDITOR_RENDERS.discard(job_id)
 
 
 def _configuration_voice_rate(configuration: ProductionConfiguration | None) -> str:

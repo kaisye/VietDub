@@ -37,6 +37,9 @@ def test_zerotts_uses_two_threads_by_default_on_apple_silicon(monkeypatch) -> No
     monkeypatch.setattr(zerotts_tts.os, "cpu_count", lambda: 8)
     assert zerotts_tts._thread_count() == 2
 
+    monkeypatch.setattr(zerotts_tts.os, "cpu_count", lambda: 10)
+    assert zerotts_tts._thread_count() == 4
+
     monkeypatch.setenv("AETHER_ZEROTTS_THREADS", "4")
     assert zerotts_tts._thread_count() == 4
 

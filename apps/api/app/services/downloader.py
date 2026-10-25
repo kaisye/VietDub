@@ -88,6 +88,8 @@ def download_reference_audio(video_url: str, audio_format: str = "wav") -> Path:
         if fallback is None:
             if _is_douyin_url(source):
                 raise RuntimeError(_douyin_failure_message(fallback_failures)) from exc
+            if _is_bot_check_error(exc):
+                raise RuntimeError(_bot_check_message(exc)) from exc
             raise RuntimeError(f"Unable to download reference audio with yt-dlp: {exc}") from exc
         destination = root / "voice-references" / f"{reference_id}.{output_format}"
         try:
@@ -223,6 +225,8 @@ def _acquire_source(
                         "facebook.com/.../videos/..., facebook.com/watch?v=..., facebook.com/reel/... "
                         "hoặc fb.watch/..."
                     ) from ytdlp_error
+                if _is_bot_check_error(ytdlp_error):
+                    raise RuntimeError(_bot_check_message(ytdlp_error)) from ytdlp_error
                 raise RuntimeError(f"Unable to download video with yt-dlp: {ytdlp_error}") from ytdlp_error
             try:
                 return _download_direct(source, root, job.id)
@@ -371,6 +375,10 @@ def _download_with_ytdlp(
                 f"Bundled media tool is unavailable: {tool}. Reinstall VietDub or verify the resources/bin folder."
             ) from exc
         except Exception as exc:
+            # A bot check rejects every format selector the same way; trying the
+            # rest only multiplies the wait before the user sees the fix.
+            if _is_bot_check_error(exc):
+                raise
             last_error = exc
             continue
 
@@ -531,6 +539,28 @@ def _try_thirdparty_fallback(
         # swallowed and misdiagnosed as a cookie problem.
         return None, [*failures, f"kiểm tra file tải về thất bại: {exc}"]
     return downloaded, failures
+
+
+def _is_bot_check_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "confirm you" in message and "not a bot" in message
+
+
+def _bot_check_message(exc: BaseException) -> str:
+    """Explain YouTube's "Sign in to confirm you're not a bot" in actionable terms."""
+    if _ytdlp_cookie_options("https://www.youtube.com/"):
+        return (
+            "YouTube vẫn chặn tải (\"xác minh không phải bot\") dù đã dùng cookie. Cookie có thể đã "
+            "hết hạn hoặc trình duyệt đã chọn chưa đăng nhập YouTube. Mở YouTube trong trình duyệt "
+            "đó, đăng nhập và xem thử một video, rồi bấm Thử lại. Nếu dùng file cookies.txt, hãy "
+            f"xuất lại file mới. Lỗi gốc: {exc}"
+        )
+    return (
+        "YouTube đang chặn tải từ mạng của bạn (\"Sign in to confirm you're not a bot\"). Vào "
+        "Cấu hình > Tải video và chọn trình duyệt bạn đã đăng nhập YouTube (Chrome, Brave, "
+        "Safari…) để VietDub dùng cookie của trình duyệt đó, rồi bấm Thử lại. "
+        f"Lỗi gốc: {exc}"
+    )
 
 
 def _is_douyin_url(url: str) -> bool:

@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .models import (
     MediaJobStatus,
@@ -154,6 +154,86 @@ class MediaJobPatch(BaseModel):
     publish_date: str | None = None
     publish_time: str | None = None
     status: MediaJobStatus | None = None
+
+
+class EditorSegmentPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    text: str | None = None
+    start: float | None = None
+    end: float | None = None
+    muted: bool | None = None
+    # Voice track, independent of the subtitle: where it starts and how long it lasts
+    # (the take is sped up / slowed down to fit).
+    audio_start: float | None = Field(default=None, ge=0)
+    audio_length: float | None = Field(default=None, gt=0, le=120)
+
+
+class EditorBlurPatch(BaseModel):
+    enabled: bool | None = None
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+    style: str | None = None
+    strength: int | None = None
+
+
+class EditorSplitRequest(BaseModel):
+    at_char: int | None = None
+
+
+class EditorAudioPatch(BaseModel):
+    original_volume: float | None = Field(default=None, ge=0, le=200)
+    dubbed_volume: float | None = Field(default=None, ge=0, le=200)
+    dubbed_enabled: bool | None = None
+    original_enabled: bool | None = None
+
+
+class EditorRegion(BaseModel):
+    id: str | None = None
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    volume: float = Field(default=100, ge=0, le=400)
+    fade_in: float = Field(default=0, ge=0, le=600)
+    fade_out: float = Field(default=0, ge=0, le=600)
+
+
+class EditorStateRequest(BaseModel):
+    """A full editable workspace state, as sent back by undo/redo."""
+
+    segments: list[dict[str, Any]]
+    blur: dict[str, Any]
+    audio: dict[str, Any]
+    style: dict[str, Any]
+    max_lines: int = Field(ge=1, le=3)
+    original_regions: list[EditorRegion]
+
+
+class EditorInsertRequest(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    text: str = Field(default="", max_length=2000)
+
+
+class EditorDraftRequest(BaseModel):
+    name: str = Field(default="", max_length=120)
+
+
+class EditorPatchRequest(BaseModel):
+    # Reject unknown fields: a newer editor talking to an older backend must fail
+    # loudly instead of reporting success while dropping the edit.
+    model_config = ConfigDict(extra="forbid")
+
+    segments: list[EditorSegmentPatch] = Field(default_factory=list)
+    blur: EditorBlurPatch | None = None
+    audio: EditorAudioPatch | None = None
+    # Partial subtitle style (same keys as subtitle styles); normalized server-side.
+    style: dict[str, Any] | None = None
+    max_lines: int | None = Field(default=None, ge=1, le=3)
+    # Full replacement list of original-audio volume regions.
+    original_regions: list[EditorRegion] | None = None
 
 
 class MediaJobVoiceRerenderRequest(BaseModel):
@@ -646,12 +726,20 @@ class RuntimeSettingsOut(BaseModel):
     local_translation_base_url: str = "http://127.0.0.1:11434/v1"
     local_translation_model: str = "qwen2.5:14b"
     local_translation_api_key: str = ""
+    local_translation_api_key_configured: bool = False
     diarization_api_url: str = "http://127.0.0.1:8010"
     diarization_device: str = "auto"
     huggingface_token: str = ""
     huggingface_token_configured: bool = False
     groq_api_key: str = ""
     groq_api_key_configured: bool = False
+    soniox_api_key: str = ""
+    soniox_api_key_configured: bool = False
+    openrouter_api_key: str = ""
+    openrouter_api_key_configured: bool = False
+    openrouter_model: str = ""
+    ytdlp_cookies_browser: str = ""
+    ytdlp_cookies_file: str = ""
     ngrok_authtoken: str = ""
     ngrok_authtoken_configured: bool = False
     ngrok_domain: str = ""
@@ -681,6 +769,11 @@ class RuntimeSettingsPatch(BaseModel):
     diarization_device: str | None = None
     huggingface_token: str | None = None
     groq_api_key: str | None = None
+    soniox_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_model: str | None = None
+    ytdlp_cookies_browser: str | None = None
+    ytdlp_cookies_file: str | None = None
     ngrok_authtoken: str | None = None
     ngrok_domain: str | None = None
 

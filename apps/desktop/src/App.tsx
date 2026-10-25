@@ -7,13 +7,14 @@ import ProgressScreen from "./screens/Progress";
 import HistoryScreen from "./screens/History";
 import VoiceConfigScreen from "./screens/VoiceConfig";
 import FeaturesScreen from "./screens/Features";
+import EditorScreen from "./screens/Editor";
 import { I18nProvider, useT, tt } from "./i18n";
 import { createDefaultDraft, saveCreateDraft } from "./lib/create-draft";
 import { openUrl } from "./lib/open-url";
 import { useUpdater } from "./lib/use-updater";
 import type { Job } from "./types";
 
-type View = "new" | "history" | "config" | "voices" | "features" | "progress";
+type View = "new" | "history" | "config" | "voices" | "features" | "progress" | "editor";
 
 export type ToolDefaults = { targetLanguage: string; voice: string };
 
@@ -245,7 +246,13 @@ function AppInner() {
         ) : view === "features" ? (
           <FeaturesScreen onOpenVoiceSetup={() => setView("voices")} />
         ) : view === "progress" && activeJobId ? (
-          <ProgressScreen jobId={activeJobId} onBack={() => setView("new")} />
+          <ProgressScreen
+            jobId={activeJobId}
+            onBack={() => setView("new")}
+            onOpenEditor={() => setView("editor")}
+          />
+        ) : view === "editor" && activeJobId ? (
+          <EditorScreen jobId={activeJobId} onBack={() => setView("progress")} />
         ) : (
           <NewVideoScreen onStarted={openJob} />
         )}

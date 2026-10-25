@@ -56,8 +56,19 @@ def _resolve_device(runtime: str, requested_device: str) -> tuple[str, str]:
     if runtime == "cpu" or requested_device == "cpu":
         return "cpu", "Local CPU"
 
+    mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    if runtime == "mps" or requested_device == "mps":
+        if not mps_available:
+            raise RuntimeError(
+                "Apple GPU (MPS) runtime was requested, but this PyTorch build cannot use MPS. "
+                "Reinstall PyTorch for Apple Silicon in .venv-omnivoice."
+            )
+        return "mps", "Apple GPU (MPS)"
+
     if runtime == "auto" and not torch.cuda.is_available():
-        return "cpu", "Local CPU fallback (CUDA unavailable)"
+        if mps_available:
+            return "mps", "Apple GPU (MPS, auto)"
+        return "cpu", "Local CPU fallback (CUDA/MPS unavailable)"
 
     if runtime == "gpu" and not torch.cuda.is_available():
         raise RuntimeError(
@@ -81,7 +92,7 @@ def _resolve_device(runtime: str, requested_device: str) -> tuple[str, str]:
 
 def _print_runtime_options() -> None:
     print("Available OmniVoice runtimes:")
-    print("  auto       Prefer CUDA and fall back to CPU")
+    print("  auto       Prefer CUDA, then Apple MPS, then CPU")
     gpus = _system_nvidia_gpus()
     if gpus:
         for gpu in gpus:
@@ -142,9 +153,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=int(os.getenv("OMNIVOICE_PORT", "8008")))
     parser.add_argument(
         "--runtime",
-        choices=("auto", "gpu", "cpu"),
+        choices=("auto", "gpu", "mps", "cpu"),
         default=os.getenv("OMNIVOICE_RUNTIME", "auto"),
-        help="Execution runtime. Auto prefers an NVIDIA GPU and falls back to CPU.",
+        help="Execution runtime. Auto prefers an NVIDIA GPU, then Apple MPS, then CPU.",
     )
     parser.add_argument("--device", default=os.getenv("OMNIVOICE_DEVICE_MAP", "auto"))
     parser.add_argument("--output-dir", default=os.getenv("OMNIVOICE_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR)))
@@ -171,6 +182,9 @@ def main() -> None:
     if args.list_devices:
         _print_runtime_options()
         return
+    # Let the few ops Apple MPS lacks run on CPU instead of aborting synthesis.
+    # Set before torch is first imported; it is ignored on CUDA/CPU.
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     if args.allow_cpu and args.runtime == "auto":
         args.runtime = "cpu"
     device, runtime_label = _resolve_device(args.runtime, args.device)

@@ -171,9 +171,11 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
   const ttsBadge = isOmniVoice ? "OmniVoice" : isZeroTTS ? "ZeroTTS" : "Edge TTS";
 
   const hasNvidiaKey = settings.nvidia_api_key_configured;
-  // Translation is 9router-only now; NVIDIA NIM was removed as a translation backend.
-  const translationModel =
-    settings.local_translation_model || settings.local_translation_base_url || "translate";
+  // Translation runs through 9router or OpenRouter; NVIDIA NIM was removed as a translation backend.
+  const usingOpenRouter = settings.translation_provider === "openrouter";
+  const translationModel = usingOpenRouter
+    ? settings.openrouter_model || "qwen/qwen3.7-flash"
+    : settings.local_translation_model || settings.local_translation_base_url || "translate";
   const transStatus: Status = "ok";
 
   // NVIDIA NIM (when a key is configured) now powers speech-to-text only.
@@ -374,24 +376,30 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
           <FeatureCard
             title={isVI ? "Dịch thuật (LLM)" : "Translation (LLM)"}
             status={transStatus}
-            badge="9router"
+            badge={usingOpenRouter ? "OpenRouter" : "9router"}
           >
             <Row
               label={isVI ? "Nhà cung cấp" : "Provider"}
-              value={isVI ? "9router · LLM cục bộ" : "9router · local LLM"}
+              value={usingOpenRouter
+                ? "OpenRouter · cloud"
+                : isVI ? "9router · LLM cục bộ" : "9router · local LLM"}
               status="ok"
             />
             <Row
               label="Base URL"
-              value={settings.local_translation_base_url || "http://127.0.0.1:20128/v1"}
+              value={usingOpenRouter
+                ? "https://openrouter.ai/api/v1"
+                : settings.local_translation_base_url || "http://127.0.0.1:20128/v1"}
               status="ok"
             />
             <Row label="Model" value={translationModel} status={transStatus} />
-            <Row
-              label={isVI ? "Cấu hình" : "Configure"}
-              value={isVI ? "Dashboard 9router · 127.0.0.1:20128" : "9router dashboard · 127.0.0.1:20128"}
-              status="ok"
-            />
+            {usingOpenRouter ? null : (
+              <Row
+                label={isVI ? "Cấu hình" : "Configure"}
+                value={isVI ? "Dashboard 9router · 127.0.0.1:20128" : "9router dashboard · 127.0.0.1:20128"}
+                status="ok"
+              />
+            )}
           </FeatureCard>
         </Section>
 

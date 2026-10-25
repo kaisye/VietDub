@@ -38,6 +38,11 @@ class RuntimeSettings:
     diarization_device: str = "auto"
     huggingface_token: str = ""
     groq_api_key: str = ""
+    soniox_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = ""
+    ytdlp_cookies_browser: str = ""
+    ytdlp_cookies_file: str = ""
     ngrok_authtoken: str = ""
     ngrok_domain: str = ""
 
@@ -109,6 +114,15 @@ def get_runtime_settings() -> RuntimeSettings:
             data.get("huggingface_token") or os.getenv("HF_TOKEN", "")
         ).strip(),
         groq_api_key=_stored_secret(data, "groq_api_key", "GROQ_API_KEY"),
+        soniox_api_key=_stored_secret(data, "soniox_api_key", "SONIOX_API_KEY"),
+        openrouter_api_key=_stored_secret(data, "openrouter_api_key", "OPENROUTER_API_KEY"),
+        ytdlp_cookies_browser=_stored_secret(
+            data, "ytdlp_cookies_browser", "AETHER_YTDLP_COOKIES_FROM_BROWSER"
+        ).lower(),
+        ytdlp_cookies_file=_stored_secret(data, "ytdlp_cookies_file", "AETHER_YTDLP_COOKIES_FILE"),
+        openrouter_model=str(
+            data.get("openrouter_model") or os.getenv("AETHER_OPENROUTER_MODEL", "qwen/qwen3.7-flash")
+        ).strip(),
         ngrok_authtoken=str(
             data.get("ngrok_authtoken") or os.getenv("NGROK_AUTHTOKEN", "")
         ).strip(),
@@ -123,7 +137,7 @@ def update_runtime_settings(values: dict[str, Any]) -> RuntimeSettings:
     allowed = set(current)
     for key, value in values.items():
         if key in allowed and value is not None:
-            # NVIDIA/Groq keys may be explicitly cleared from the desktop UI.
+            # NVIDIA/Groq/Soniox/OpenRouter keys may be explicitly cleared from the desktop UI.
             # Keep the previous write-only behavior for unrelated secrets so a
             # masked/blank response cannot accidentally erase them.
             if key in {
@@ -166,6 +180,10 @@ def apply_runtime_secrets_to_env(settings: RuntimeSettings | None = None) -> Non
     settings = settings or get_runtime_settings()
     _set_or_clear_env("NVIDIA_API_KEY", settings.nvidia_api_key)
     _set_or_clear_env("GROQ_API_KEY", settings.groq_api_key)
+    _set_or_clear_env("SONIOX_API_KEY", settings.soniox_api_key)
+    # The downloader reads yt-dlp cookie options from these variables.
+    _set_or_clear_env("AETHER_YTDLP_COOKIES_FROM_BROWSER", settings.ytdlp_cookies_browser)
+    _set_or_clear_env("AETHER_YTDLP_COOKIES_FILE", settings.ytdlp_cookies_file)
 
 
 def _set_or_clear_env(name: str, value: str) -> None:

@@ -105,3 +105,27 @@ def test_rerender_starts_from_translated_checkpoint_with_new_output(monkeypatch)
     assert started["subtitle"] == translated
     assert started["output_filename"].startswith("job-123-voice-")
     assert started["output_filename"].endswith(".mp4")
+
+
+def test_fail_interrupted_jobs_marks_running_jobs_failed(monkeypatch):
+    from app import worker
+
+    running = _job(id="job-running", status=MediaJobStatus.tts_generating, current_step="Generating voice audio")
+    persisted: list[str] = []
+    committed: list[bool] = []
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return [running]
+
+    db = SimpleNamespace(query=lambda _model: _Query(), commit=lambda: committed.append(True))
+    monkeypatch.setattr(worker, "_persist_job_log", lambda job: persisted.append(job.id))
+
+    assert worker.fail_interrupted_jobs(db) == 1
+    assert running.status == MediaJobStatus.failed
+    assert "Thử lại" in running.error_message
+    assert "Interrupted by a backend restart" in running.logs
+    assert persisted == ["job-running"] and committed == [True]

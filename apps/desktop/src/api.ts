@@ -1,6 +1,12 @@
 import type {
   ColabAccounts,
   CreatedMediaJob,
+  EditorAudio,
+  EditorBlur,
+  EditorRegion,
+  EditorSegmentPatch,
+  EditorStyle,
+  EditorWorkspace,
   Job,
   JobOutput,
   NewJobInput,
@@ -271,6 +277,81 @@ export const rerenderJobVoice = (id: string, voiceId: string) =>
     method: "POST",
     body: JSON.stringify({ voice_id: voiceId }),
   });
+
+// --- Editor workspace -------------------------------------------------------
+export const getEditorWorkspace = (id: string, rebuild = false) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor${rebuild ? "?rebuild=true" : ""}`, { cache: "no-store" });
+
+export const patchEditorWorkspace = (
+  id: string,
+  payload: {
+    segments?: EditorSegmentPatch[];
+    blur?: Partial<EditorBlur>;
+    audio?: Partial<EditorAudio>;
+    style?: Partial<EditorStyle>;
+    max_lines?: number;
+    original_regions?: EditorRegion[];
+  },
+) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor`, { method: "PATCH", body: JSON.stringify(payload) });
+
+export const insertEditorSegment = (id: string, start: number, end: number, text = "") =>
+  request<EditorWorkspace & { created_id: string }>(`/jobs/${id}/editor/segments`, {
+    method: "POST",
+    body: JSON.stringify({ start, end, text }),
+  });
+
+export const deleteEditorSegment = (id: string, segmentId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}`, { method: "DELETE" });
+
+export const splitEditorSegment = (id: string, segmentId: string, atChar: number | null) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/split`, {
+    method: "POST",
+    body: JSON.stringify({ at_char: atChar }),
+  });
+
+export const mergeEditorSegmentWithNext = (id: string, segmentId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/merge-next`, { method: "POST" });
+
+export const swapEditorSegmentAudio = (id: string, segmentId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/swap-audio`, { method: "POST" });
+
+export type EditorEditableState = Pick<
+  EditorWorkspace,
+  "segments" | "blur" | "audio" | "style" | "max_lines" | "original_regions"
+>;
+
+export const putEditorState = (id: string, state: EditorEditableState) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/state`, { method: "PUT", body: JSON.stringify(state) });
+
+export type EditorDraft = { id: string; name: string; created_at: string; segment_count: number };
+
+export const listEditorDrafts = (id: string) =>
+  request<EditorDraft[]>(`/jobs/${id}/editor/drafts`, { cache: "no-store" });
+
+export const saveEditorDraft = (id: string, name: string) =>
+  request<EditorDraft>(`/jobs/${id}/editor/drafts`, { method: "POST", body: JSON.stringify({ name }) });
+
+export const restoreEditorDraft = (id: string, draftId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/drafts/${draftId}/restore`, { method: "POST" });
+
+export const deleteEditorDraft = (id: string, draftId: string) =>
+  request<{ status: string }>(`/jobs/${id}/editor/drafts/${draftId}`, { method: "DELETE" });
+
+export const getEditorWaveform = (id: string) =>
+  request<{ rate: number; peaks: number[] }>(`/jobs/${id}/editor/waveform`);
+
+export const regenerateEditorSegmentAudio = (id: string, segmentId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/tts`, { method: "POST" });
+
+export const retranslateEditorSegment = (id: string, segmentId: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/translate`, { method: "POST" });
+
+export const exportEditorWorkspace = (id: string) =>
+  request<{ folder: string }>(`/jobs/${id}/editor/export`, { method: "POST" });
+
+export const renderEditorWorkspace = (id: string) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/render`, { method: "POST" });
 
 export const cancelJob = (id: string) =>
   request<Job>(`/jobs/${id}/cancel`, { method: "POST" });

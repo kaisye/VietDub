@@ -248,7 +248,10 @@ def _find_omnivoice_python(runtime: str, device: str) -> tuple[Path | None, str]
     errors: list[str] = []
     seen: set[Path] = set()
     for candidate in candidates:
-        resolved = candidate.resolve()
+        # Never resolve symlinks: on macOS/Linux a venv's bin/python links to the
+        # base interpreter, and running that target directly loses the venv
+        # (and its torch/omnivoice packages).
+        resolved = Path(os.path.abspath(candidate.expanduser()))
         if resolved in seen or not resolved.exists():
             continue
         seen.add(resolved)
