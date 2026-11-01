@@ -369,12 +369,103 @@ export type EditorWorkspace = {
   max_lines: number;
   /** Original-audio volume overrides (percent) inside time ranges. */
   original_regions: EditorRegion[];
+  /** Music / sound-effect tracks (always present in API answers; [] for older workspaces). */
+  audio_tracks: EditorAudioTrack[];
   /** Derived server-side from style; never sent back. */
   subtitle: EditorSubtitleLayout;
   segments: EditorSegment[];
   render: { status: "idle" | "running" | "done" | "failed"; output_url?: string; error?: string };
   updated_at: string;
 };
+
+// ── Editor audio tracks & music library ──
+export type EditorDucking = {
+  enabled: boolean;
+  /** Gain under the voice, in dB (≤ 0). */
+  amount_db: number;
+  /** Seconds the music takes to go down before a line / come back up after it. */
+  attack: number;
+  release: number;
+};
+
+export type EditorAudioClip = {
+  id: string;
+  asset_id: string;
+  /** Display name snapshot (kept if the asset is later deleted). */
+  title?: string;
+  /** Timeline position (s). */
+  start: number;
+  /** Offset into the file (s). */
+  in: number;
+  duration: number;
+  /** Percent, 0–200. */
+  volume: number;
+  fade_in: number;
+  fade_out: number;
+  loop: boolean;
+  ducking: EditorDucking;
+};
+
+export type EditorAudioTrack = {
+  id: string;
+  name: string;
+  kind: "music" | "sfx";
+  muted: boolean;
+  locked: boolean;
+  volume: number;
+  clips: EditorAudioClip[];
+};
+
+export type MusicAsset = {
+  id: string;
+  title: string;
+  artist: string;
+  kind: "music" | "sfx";
+  duration: number;
+  tags: string[];
+  source: "upload" | "openverse" | "jamendo" | string;
+  source_id: string;
+  source_url: string;
+  license: string;
+  license_version: string;
+  license_url: string;
+  license_label: string;
+  attribution: string;
+  attribution_required: boolean;
+  commercial_ok: boolean;
+  file_url: string;
+  missing: boolean;
+  created_at: string;
+};
+
+export type OnlineTrack = {
+  provider: "openverse" | "jamendo";
+  id: string;
+  title: string;
+  artist: string;
+  duration: number | null;
+  license: string;
+  license_label: string;
+  license_url: string;
+  commercial_ok: boolean;
+  attribution_required: boolean;
+  attribution: string;
+  preview_url: string;
+  landing_url: string;
+  source: string;
+  category: string;
+  tags: string[];
+  imported: boolean;
+};
+
+export type MusicCredits = {
+  text: string;
+  items: MusicAsset[];
+  credited_count: number;
+  missing: string[];
+  non_commercial: string[];
+};
+// ── end Editor audio tracks & music library ──
 
 export type EditorSegmentPatch = Partial<Pick<EditorSegment, "text" | "start" | "end" | "muted" | "audio_start">> & {
   id: string;

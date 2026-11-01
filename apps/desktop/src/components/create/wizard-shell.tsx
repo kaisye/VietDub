@@ -49,14 +49,14 @@ export function WizardShell({
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--canvas)_92%,transparent)] px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-8">
+      <header className="sticky top-0 z-20 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_92%,transparent)] px-8 py-4 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1560px] items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--primary-hover)]">
+            <p className="text-[11.5px] font-semibold uppercase tracking-[0.08em] text-[var(--primary)]">
               {tt(t.wiz_step_label, { n: step + 1, total: steps.length })}
             </p>
-            <h1 className="truncate font-display text-2xl sm:text-3xl">{title}</h1>
-            <p className="hidden text-sm text-[var(--text-secondary)] sm:block">{description}</p>
+            <h1 className="truncate font-display text-[22px] leading-tight">{title}</h1>
+            <p className="mt-0.5 hidden text-[13.5px] text-[var(--text-secondary)] sm:block">{description}</p>
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="ghost" size="sm" leadingIcon={<RotateCcw size={15} />} onClick={onReset}>
@@ -71,7 +71,7 @@ export function WizardShell({
       </header>
 
       <div className="mx-auto grid w-full max-w-[1560px] flex-1 xl:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="hidden border-r border-[var(--border-subtle)] p-4 xl:block">
+        <aside className="hidden border-r border-[var(--border)] bg-[var(--surface)] p-4 xl:block">
           <div className="sticky top-28">
             <StepNavigation
               steps={navSteps}
@@ -81,7 +81,7 @@ export function WizardShell({
           </div>
         </aside>
 
-        <main className="min-w-0 px-4 py-6 sm:px-6 lg:px-8">
+        <div className="min-w-0 px-8 py-7">
           <div className="mb-5 xl:hidden">
             <StepNavigation
               steps={navSteps}
@@ -95,10 +95,10 @@ export function WizardShell({
             </InlineNotice>
           ) : null}
           <div className={Object.keys(errors).length ? "mt-5" : ""}>{children}</div>
-        </main>
+        </div>
       </div>
 
-      <footer className="sticky bottom-0 z-20 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_94%,transparent)] px-4 py-3 backdrop-blur-xl sm:px-6">
+      <footer className="sticky bottom-0 z-20 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_94%,transparent)] px-8 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1560px] items-center justify-between gap-3">
           <Button variant="ghost" leadingIcon={<ArrowLeft size={16} />} onClick={onBack}>
             {t.wiz_back}
@@ -126,10 +126,10 @@ export function EditorSection({
   compact?: boolean;
 }) {
   return (
-    <Panel className={compact ? "p-4" : "p-5 sm:p-6"}>
+    <Panel elevated className={compact ? "p-4" : "p-6"}>
       <div className={`${compact ? "mb-3" : "mb-6"} flex min-w-0 items-start justify-between gap-4`}>
         <div className="min-w-0">
-          <h2 className={`font-display ${compact ? "text-xl" : "text-2xl sm:text-3xl"}`}>{title}</h2>
+          <h2 className={`font-display ${compact ? "text-base" : "text-lg"}`}>{title}</h2>
           {description ? (
             <p className={`${compact ? "mt-0.5 text-xs leading-5" : "mt-1 text-sm leading-6"} text-[var(--text-secondary)]`}>
               {description}

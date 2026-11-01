@@ -33,6 +33,7 @@ export default function OriginalTrack({
   onSelectRegion,
   onRegionsChange,
   onSeek,
+  locked = false,
 }: {
   duration: number;
   zoom: number;
@@ -44,6 +45,8 @@ export default function OriginalTrack({
   onSelectRegion: (id: string | null) => void;
   onRegionsChange: (regions: EditorRegion[], selectId?: string) => void;
   onSeek: (t: number) => void;
+  /** Timeline track lock: regions can't be created or edited, clicks only seek. */
+  locked?: boolean;
 }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -84,7 +87,7 @@ export default function OriginalTrack({
       const volume = region ? baseVolume + (region.volume - baseVolume) * regionEnvelope(region, t0) : baseVolume;
       const scale = Math.min(1.6, Math.sqrt(volume / 100));
       const half = Math.min(middle, (peak / 255) * middle * Math.max(0.08, scale));
-      ctx.fillStyle = region ? "rgba(255, 179, 120, 0.95)" : "rgba(214, 205, 192, 0.55)";
+      ctx.fillStyle = region ? "rgba(147, 197, 253, 0.95)" : "rgba(203, 213, 225, 0.5)";
       ctx.fillRect(x, middle - half, 1, half * 2);
     }
   }, [waveform, viewport.left, viewport.width, zoom, shown, baseVolume]);
@@ -137,6 +140,11 @@ export default function OriginalTrack({
   // Drag on empty lane = new region; a plain click seeks.
   const onLaneDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
+    if (locked) {
+      onSelectRegion(null);
+      onSeek(timeAt(event.clientX));
+      return;
+    }
     const anchor = timeAt(event.clientX);
     const limit = bounds(null)(anchor);
     const id = `reg-${Math.random().toString(36).slice(2, 10)}`;
@@ -211,7 +219,11 @@ export default function OriginalTrack({
         <div
           key={region.id}
           className={`editor-region${region.id === selectedRegionId ? " selected" : ""}`}
-          style={{ left: region.start * zoom, width: Math.max(4, (region.end - region.start) * zoom) }}
+          style={{
+            left: region.start * zoom,
+            width: Math.max(4, (region.end - region.start) * zoom),
+            pointerEvents: locked ? "none" : undefined,
+          }}
           onPointerDown={(event) => {
             event.stopPropagation();
             onSelectRegion(region.id);

@@ -1151,6 +1151,16 @@ const CONTEXT_HINTS = [
   },
 ] as const;
 
+/** Translation tone presets: stored value (sent to the translator) → Vietnamese label. */
+const TONE_LABELS_VI: Record<string, string> = {
+  "Natural and context-aware": "Tự nhiên, phù hợp ngữ cảnh",
+  "Friendly and conversational": "Thân thiện, gần gũi",
+  "Professional and formal": "Chuyên nghiệp, trang trọng",
+  "Humorous and witty": "Hài hước, dí dỏm",
+  "Inspirational and energetic": "Truyền cảm hứng, năng động",
+  "Serious and concise": "Nghiêm túc, súc tích",
+};
+
 function TranslationStep({ draft, patch }: DraftStepProps) {
   const { t, lang } = useT();
   const translation = draft.translation;
@@ -1159,14 +1169,7 @@ function TranslationStep({ draft, patch }: DraftStepProps) {
   const [newHintText, setNewHintText] = useState("");
   const newHintInputRef = useRef<HTMLTextAreaElement>(null);
 
-  const toneOptions = [
-    { value: "Natural and context-aware",   label: lang === "vi" ? "Tự nhiên, phù hợp ngữ cảnh"    : "Natural and context-aware" },
-    { value: "Friendly and conversational", label: lang === "vi" ? "Thân thiện, gần gũi"            : "Friendly and conversational" },
-    { value: "Professional and formal",     label: lang === "vi" ? "Chuyên nghiệp, trang trọng"     : "Professional and formal" },
-    { value: "Humorous and witty",          label: lang === "vi" ? "Hài hước, dí dỏm"               : "Humorous and witty" },
-    { value: "Inspirational and energetic", label: lang === "vi" ? "Truyền cảm hứng, năng động"     : "Inspirational and energetic" },
-    { value: "Serious and concise",         label: lang === "vi" ? "Nghiêm túc, súc tích"           : "Serious and concise" },
-  ];
+  const toneOptions = Object.entries(TONE_LABELS_VI).map(([value, vi]) => ({ value, label: lang === "vi" ? vi : value }));
 
   function applyHint(text: string) {
     const existing = translation.context.trim();
@@ -1671,10 +1674,10 @@ function SubtitleStep({
             <InlineNotice title={t.sub_preview_unavail} tone="warning">{previewError}</InlineNotice>
           </div>
         ) : null}
-        <div className="relative flex min-h-[360px] items-center justify-center overflow-hidden rounded-[var(--radius-panel-sm)] bg-[#211f1a] p-4 sm:min-h-[420px]">
+        <div className="relative flex min-h-[360px] items-center justify-center overflow-hidden rounded-[var(--radius-panel-sm)] bg-[var(--navy-950)] p-4 sm:min-h-[420px]">
           <div
             ref={previewFrameRef}
-            className="relative max-w-full overflow-hidden rounded-[var(--radius-panel-sm)] bg-black shadow-[0_18px_50px_rgba(18,14,8,.22)]"
+            className="relative max-w-full overflow-hidden rounded-[var(--radius-panel-sm)] bg-black shadow-[0_18px_50px_rgba(7,16,34,.35)]"
             style={{
               aspectRatio: `${previewRatio}`,
               containerType: "size",
@@ -1698,7 +1701,7 @@ function SubtitleStep({
                 onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
               />
             ) : (
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_25%,#766c58,#292722_72%)]" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_25%,var(--navy-700),var(--navy-950)_72%)]" />
             )}
             <svg aria-hidden width="0" height="0" style={{ position: "absolute" }}>
               <defs>
@@ -2227,6 +2230,27 @@ function OutputStep({ draft, patch }: DraftStepProps) {
           <Field label={t.out_platform}><Select value={draft.output.platform} onChange={(event) => patch("output", { ...draft.output, platform: event.target.value })}><option>YouTube</option><option>Facebook</option><option>TikTok</option><option>Douyin</option><option>Vimeo</option></Select></Field>
           <Field label={t.out_format}><Select value={draft.output.format} onChange={(event) => patch("output", { ...draft.output, format: event.target.value as "mp4" | "webm" })}><option value="mp4">MP4</option><option value="webm">WebM</option></Select></Field>
         </div>
+        {/* Auto review (Rà soát tự động) after the dub finishes. */}
+        <div className="mt-5 grid gap-3 border-t border-[var(--border-subtle)] pt-5">
+          <Switch
+            checked={(draft.workflow.auto_review ?? "propose") !== "off"}
+            onChange={(on) => patch("workflow", { ...draft.workflow, auto_review: on ? "propose" : "off" })}
+            label={t.ar_wizard_label}
+            description={t.ar_wizard_desc}
+          />
+          {(draft.workflow.auto_review ?? "propose") !== "off" ? (
+            <Field label={t.ar_title} help={t[`ar_mode_${draft.workflow.auto_review ?? "propose"}_hint` as "ar_mode_propose_hint"]}>
+              <Select
+                value={draft.workflow.auto_review ?? "propose"}
+                onChange={(event) => patch("workflow", { ...draft.workflow, auto_review: event.target.value as "report" | "propose" | "safe" })}
+              >
+                <option value="report">{t.ar_mode_report}</option>
+                <option value="propose">{t.ar_mode_propose}</option>
+                <option value="safe">{t.ar_mode_safe}</option>
+              </Select>
+            </Field>
+          ) : null}
+        </div>
       </EditorSection>
     </div>
   );
@@ -2245,7 +2269,7 @@ function ReviewStep({
   submitError: string;
   onCreate: (run: boolean) => void;
 }) {
-  const { t } = useT();
+  const { t, lang } = useT();
 
   const groups = useMemo(
     () => {
@@ -2264,12 +2288,12 @@ function ReviewStep({
       return [
         [t.rev_label_source, sourceName, sourceDetail],
         [t.rev_label_voice, draft.voice.voice_id, `${draft.voice.rate >= 0 ? "+" : ""}${draft.voice.rate}%`],
-        [t.rev_label_translation, draft.translation.tone, `${fidelity[draft.translation.semantic_fidelity] ?? draft.translation.semantic_fidelity} · ${draft.translation.remove_sound_tags ? t.rev_tags_removed : t.rev_tags_kept}`],
+        [t.rev_label_translation, lang === "vi" ? TONE_LABELS_VI[draft.translation.tone] ?? draft.translation.tone : draft.translation.tone, `${fidelity[draft.translation.semantic_fidelity] ?? draft.translation.semantic_fidelity} · ${draft.translation.remove_sound_tags ? t.rev_tags_removed : t.rev_tags_kept}`],
         [t.rev_label_subtitle, draft.subtitle.style_id, `${pos[draft.subtitle.position] ?? draft.subtitle.position} · ${t.sub_outline_width} ${Number(draft.subtitle.style_overrides.outline ?? 0)}px`],
         [t.rev_label_audio_output, `${draft.audio.original_volume}% / ${draft.audio.dubbed_volume}%`, `${aspect[draft.output.aspect_ratio] ?? draft.output.aspect_ratio} · ${quality[draft.output.render_quality] ?? draft.output.render_quality} · ${draft.output.platform}`],
       ];
     },
-    [draft, t],
+    [draft, t, lang],
   );
   return (
     <EditorSection title={t.rev_title} description={t.rev_desc}>

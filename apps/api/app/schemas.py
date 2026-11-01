@@ -182,6 +182,12 @@ class EditorBlurPatch(BaseModel):
 
 class EditorSplitRequest(BaseModel):
     at_char: int | None = None
+    # Timeline playhead: cut the timing exactly here (takes precedence over at_char).
+    at_time: float | None = Field(default=None, ge=0)
+
+
+class EditorBatchDeleteRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
 
 
 class EditorAudioPatch(BaseModel):
@@ -209,6 +215,8 @@ class EditorStateRequest(BaseModel):
     style: dict[str, Any]
     max_lines: int = Field(ge=1, le=3)
     original_regions: list[EditorRegion]
+    # Music / sound-effect tracks; absent in snapshots from editors without them.
+    audio_tracks: list[dict[str, Any]] | None = None
 
 
 class EditorInsertRequest(BaseModel):
@@ -234,6 +242,11 @@ class EditorPatchRequest(BaseModel):
     max_lines: int | None = Field(default=None, ge=1, le=3)
     # Full replacement list of original-audio volume regions.
     original_regions: list[EditorRegion] | None = None
+    # Music / sound-effect tracks: either the full list (normalized server-side)…
+    audio_tracks: list[dict[str, Any]] | None = Field(default=None, max_length=32)
+    # …or granular edits: {op: add_track|update_track|delete_track|add_clip|update_clip|
+    # delete_clip|move_clip, …} (see services/music_mix.apply_ops).
+    audio_ops: list[dict[str, Any]] | None = Field(default=None, max_length=500)
 
 
 class MediaJobVoiceRerenderRequest(BaseModel):

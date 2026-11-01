@@ -1,8 +1,17 @@
-import { Grid3X3, List, Pencil, Trash2 } from "lucide-react";
+import { FolderKanban, Film, FolderOpen, Grid3X3, List, Pencil, Trash2 } from "lucide-react";
+import { Page, PageHeader } from "../components/layout/PageHeader";
+import { Card } from "../components/ui/card";
+import { EmptyState, InlineNotice, Skeleton } from "../components/ui/feedback";
+import { Tabs } from "../components/ui/navigation";
+import { Tooltip } from "../components/ui/tooltip";
 import { useEffect, useRef, useState } from "react";
-import { deleteJob, listJobs, revealJob } from "../api";
+import { deleteJob, listJobs, outputUrl, revealJob } from "../api";
+import { JobStatusBadge } from "../components/channels/jobs";
+import { ReviewBadge, useReviewSummaries } from "../components/review/ReviewBadge";
 import type { Job } from "../types";
 import { useT } from "../i18n";
+
+const NO_IDS: string[] = [];
 
 function timeAgo(iso: string, isVI: boolean): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -40,7 +49,16 @@ function VideoThumbnail({ job }: { job: Job }) {
       return;
     }
 
-    // Canvas frame capture for non-YouTube sources
+    // Canvas frame capture for non-YouTube sources. Page URLs (Douyin, TikTok…) are not
+    // playable media, so grab the frame from the rendered output instead; fall back to the
+    // source URL only when it points at a media file.
+    const mediaSrc =
+      outputUrl(job.output_url) ||
+      (/\.(mp4|webm|mov|m4v|mkv)(\?|$)/i.test(job.video_url) ? job.video_url : null);
+    if (!mediaSrc) {
+      setFailed(true);
+      return;
+    }
     let cancelled = false;
     const video = document.createElement("video");
     videoRef.current = video;
@@ -70,66 +88,31 @@ function VideoThumbnail({ job }: { job: Job }) {
       if (!cancelled) setFailed(true);
     });
 
-    video.src = job.video_url;
+    video.src = mediaSrc;
 
     return () => {
       cancelled = true;
       video.src = "";
       videoRef.current = null;
     };
-  }, [job.video_url, src]);
-
-  const imgStyle: React.CSSProperties = {
-    width: "100%",
-    height: 120,
-    objectFit: "cover",
-    background: "#000",
-    display: "block",
-  };
+  }, [job.video_url, job.output_url, src]);
 
   if (src && !failed) {
     return (
       <img
         src={src}
         alt=""
-        style={imgStyle}
+        className="block aspect-video w-full bg-black object-cover transition duration-300 group-hover:scale-[1.03]"
         onError={() => setFailed(true)}
       />
     );
   }
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: 120,
-        background: "var(--surface-muted)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      {!failed && !src && (
-        <span style={{ fontSize: 18, color: "var(--text-secondary)", opacity: 0.4 }}>▶</span>
-      )}
+    <div className="flex aspect-video w-full items-center justify-center bg-[radial-gradient(circle_at_50%_30%,var(--navy-700),var(--navy-950)_80%)]">
+      <Film size={22} className="text-white/35" />
     </div>
   );
-}
-
-const ACTIVE = new Set([
-  "queued",
-  "downloading",
-  "transcribing",
-  "translating",
-  "tts_generating",
-  "rendering",
-]);
-
-function pillClass(status: string): string {
-  if (status === "ready") return "pill ready";
-  if (status === "failed" || status === "cancelled") return "pill failed";
-  if (ACTIVE.has(status)) return "pill run";
-  return "pill idle";
 }
 
 export default function HistoryScreen({ onOpen, onEdit }: { onOpen: (jobId: string) => void; onEdit: (job: Job) => void }) {
@@ -141,6 +124,8 @@ export default function HistoryScreen({ onOpen, onEdit }: { onOpen: (jobId: stri
   const [deleting, setDeleting] = useState<string | null>(null);
   const [revealing, setRevealing] = useState<string | null>(null);
   const [revealError, setRevealError] = useState("");
+
+  const reviewSummaries = useReviewSummaries(jobs?.filter((job) => job.status === "ready").map((job) => job.id) ?? NO_IDS);
 
   useEffect(() => {
     listJobs()
@@ -176,174 +161,160 @@ export default function HistoryScreen({ onOpen, onEdit }: { onOpen: (jobId: stri
     }
   }
 
+  const iconBtn =
+    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition hover:bg-[var(--surface-hover)] disabled:opacity-40";
+
   return (
-    <div className="page">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <div>
-          <h1>{t.history_title}</h1>
-          <p className="sub">{t.history_sub}</p>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button
-            onClick={() => setViewMode("list")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "6px 12px",
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: viewMode === "list" ? "var(--primary)" : "var(--surface)",
-              color: viewMode === "list" ? "#fff" : "var(--text-primary)",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: viewMode === "list" ? 600 : 400,
-            }}
-          >
-            <List size={16} />
-          </button>
-          <button
-            onClick={() => setViewMode("grid")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "6px 12px",
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: viewMode === "grid" ? "var(--primary)" : "var(--surface)",
-              color: viewMode === "grid" ? "#fff" : "var(--text-primary)",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: viewMode === "grid" ? 600 : 400,
-            }}
-          >
-            <Grid3X3 size={16} />
-          </button>
-        </div>
-      </div>
+    <Page>
+      <PageHeader
+        icon={<FolderKanban size={20} />}
+        title={t.history_title}
+        description={t.history_sub}
+        actions={
+          <Tabs
+            variant="pills"
+            value={viewMode}
+            onChange={(id) => setViewMode(id as "list" | "grid")}
+            items={[
+              { id: "grid", label: <Grid3X3 size={15} aria-label="Grid" /> },
+              { id: "list", label: <List size={15} aria-label="List" /> },
+            ]}
+          />
+        }
+      />
 
-      {error ? <div className="banner err">{error}</div> : null}
-      {revealError ? <div className="banner err" style={{ marginBottom: 12 }}>{revealError}</div> : null}
-      {jobs && jobs.length === 0 ? <p className="muted">{t.history_empty}</p> : null}
-      {!jobs && !error ? <p className="muted">{t.loading}</p> : null}
-
-      {viewMode === "list" ? (
-        <div className="joblist">
-          {jobs?.map((job) => (
-            <div key={job.id} className="jobrow" style={{ display: "flex", alignItems: "center" }}>
-              <button style={{ flex: 1, display: "flex", alignItems: "center", gap: 12, background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }} onClick={() => onOpen(job.id)}>
-                <span className="title">{job.source_title || job.video_url}</span>
-                {job.created_at && (
-                  <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{timeAgo(job.created_at, isVI)}</span>
-                )}
-                <span className="muted">{job.target_language}</span>
-                <span className={pillClass(job.status)}>{job.status}</span>
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); onEdit(job); }}
-                style={{ padding: "4px 8px", background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", borderRadius: 6, flexShrink: 0 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--primary)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-secondary)"; }}
-                title={t.history_edit}
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                disabled={deleting === job.id}
-                onClick={(e) => void handleDelete(e, job.id)}
-                style={{ padding: "4px 8px", background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", borderRadius: 6, flexShrink: 0 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--err)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-secondary)"; }}
-              >
-                <Trash2 size={14} />
-              </button>
+      {error ? <InlineNotice tone="danger" title={error} className="mb-4" /> : null}
+      {revealError ? <InlineNotice tone="danger" title={revealError} className="mb-4" /> : null}
+      {jobs && jobs.length === 0 ? (
+        <Card padding="lg">
+          <EmptyState icon={<FolderKanban size={22} />} title={t.history_empty} />
+        </Card>
+      ) : null}
+      {!jobs && !error ? (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4" aria-label={t.loading}>
+          {Array.from({ length: 8 }, (_, i) => (
+            <div key={i} className="overflow-hidden rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)]">
+              <Skeleton className="aspect-video w-full" rounded="sm" />
+              <div className="grid gap-2 p-3">
+                <Skeleton className="h-3.5 w-4/5" />
+                <Skeleton className="h-3 w-1/3" />
+              </div>
             </div>
           ))}
         </div>
+      ) : null}
+
+      {viewMode === "list" ? (
+        jobs && jobs.length ? (
+          <div className="overflow-hidden rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-panel)]">
+            {jobs.map((job) => (
+              <div
+                key={job.id}
+                className="group flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 transition-colors last:border-b-0 hover:bg-[var(--surface-hover)]"
+              >
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-4 bg-transparent p-0 text-left"
+                  onClick={() => onOpen(job.id)}
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--primary-soft)] text-[var(--primary)]">
+                    <Film size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-[var(--text-primary)]">
+                    {job.source_title || job.video_url}
+                  </span>
+                  {job.created_at && (
+                    <span className="w-28 shrink-0 text-right text-xs text-[var(--text-tertiary)]">{timeAgo(job.created_at, isVI)}</span>
+                  )}
+                  <span className="w-10 shrink-0 text-center font-mono text-xs text-[var(--text-secondary)]">{job.target_language}</span>
+                  <span className="w-28 shrink-0">
+                    <JobStatusBadge t={t} status={job.status} />
+                  </span>
+                </button>
+                <ReviewBadge summary={reviewSummaries[job.id]} onClick={() => onOpen(job.id)} />
+                <Tooltip content={t.history_edit}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEdit(job); }}
+                    className={`${iconBtn} hover:text-[var(--primary)]`}
+                    aria-label={t.history_edit}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </Tooltip>
+                <button
+                  disabled={deleting === job.id}
+                  onClick={(e) => void handleDelete(e, job.id)}
+                  className={`${iconBtn} hover:text-[var(--danger)]`}
+                  aria-label={t.delete}
+                  title={t.delete}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
           {jobs?.map((job) => (
             <div
               key={job.id}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                borderRadius: 8,
-                border: "1px solid var(--border)",
-                background: "var(--surface)",
-                overflow: "hidden",
-                transition: "border-color 200ms, box-shadow 200ms",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLDivElement).style.borderColor = "var(--primary)";
-                (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 12px rgba(230, 120, 49, 0.15)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border)";
-                (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
-              }}
+              className="group flex flex-col overflow-hidden rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-panel)] transition hover:-translate-y-px hover:border-[color-mix(in_srgb,var(--primary)_45%,var(--border))] hover:shadow-[var(--shadow-float)]"
             >
-              <button
-                onClick={() => onOpen(job.id)}
-                style={{ display: "block", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
-              >
-                <VideoThumbnail job={job} />
-                <div style={{ padding: "8px 10px 4px" }}>
-                  <span
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 13,
-                      display: "block",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      color: "var(--text-primary)",
-                    }}
-                  >
+              <button onClick={() => onOpen(job.id)} className="block bg-transparent p-0 text-left">
+                <div className="relative overflow-hidden">
+                  <VideoThumbnail job={job} />
+                  <span className="absolute left-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white backdrop-blur-sm">
+                    {job.target_language}
+                  </span>
+                </div>
+                <div className="px-3.5 pb-1 pt-3">
+                  <span className="block truncate text-[13.5px] font-semibold text-[var(--text-primary)]">
                     {job.source_title || job.video_url}
                   </span>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 4 }}>
-                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{job.target_language}</span>
-                    <span className={pillClass(job.status)} style={{ fontSize: 11 }}>{job.status}</span>
+                  <div className="mt-1.5 flex items-center justify-between gap-2">
+                    <JobStatusBadge t={t} status={job.status} />
+                    {job.created_at && (
+                      <span className="text-[11.5px] text-[var(--text-tertiary)]">{timeAgo(job.created_at, isVI)}</span>
+                    )}
                   </div>
-                  {job.created_at && (
-                    <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 3 }}>
-                      {timeAgo(job.created_at, isVI)}
-                    </div>
-                  )}
                 </div>
               </button>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "6px 10px 8px" }}>
+              {reviewSummaries[job.id] && reviewSummaries[job.id].status !== "none" ? (
+                <div className="px-3.5 pt-1.5">
+                  <ReviewBadge summary={reviewSummaries[job.id]} onClick={() => onOpen(job.id)} />
+                </div>
+              ) : null}
+              <div className="mt-auto flex items-center justify-between gap-2 px-3.5 pb-3 pt-2">
                 {job.output_url ? (
                   <button
                     disabled={revealing === job.id}
                     onClick={(e) => void handleReveal(e, job.id)}
-                    style={{ padding: "3px 10px", background: "var(--primary)", border: "none", borderRadius: 5, cursor: "pointer", color: "#fff", fontSize: 11, fontWeight: 600, opacity: revealing === job.id ? 0.65 : 1 }}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[var(--primary-soft)] px-2.5 text-xs font-semibold text-[var(--primary-hover)] transition hover:bg-[var(--primary-soft-strong)] disabled:opacity-60"
                   >
+                    <FolderOpen size={13} />
                     {revealing === job.id ? (isVI ? "Đang mở…" : "Opening…") : t.history_open}
                   </button>
                 ) : (
                   <span />
                 )}
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onEdit(job); }}
-                    style={{ padding: "4px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 5, cursor: "pointer", color: "var(--text-secondary)", display: "flex", alignItems: "center" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--primary)"; e.currentTarget.style.borderColor = "var(--primary)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.borderColor = "var(--border)"; }}
-                    title={t.history_edit}
-                  >
-                    <Pencil size={12} />
-                  </button>
+                <div className="flex gap-0.5">
+                  <Tooltip content={t.history_edit}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onEdit(job); }}
+                      className={`${iconBtn} h-7 w-7 hover:text-[var(--primary)]`}
+                      aria-label={t.history_edit}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </Tooltip>
                   <button
                     disabled={deleting === job.id}
                     onClick={(e) => void handleDelete(e, job.id)}
-                    style={{ padding: "4px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 5, cursor: "pointer", color: "var(--text-secondary)", display: "flex", alignItems: "center" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--err)"; e.currentTarget.style.borderColor = "var(--err)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.borderColor = "var(--border)"; }}
+                    className={`${iconBtn} h-7 w-7 hover:text-[var(--danger)]`}
+                    aria-label={t.delete}
+                    title={t.delete}
                   >
-                    <Trash2 size={12} />
+                    <Trash2 size={13} />
                   </button>
                 </div>
               </div>
@@ -351,6 +322,6 @@ export default function HistoryScreen({ onOpen, onEdit }: { onOpen: (jobId: stri
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

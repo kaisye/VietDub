@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { getRuntimeOptions, getRuntimeSettings, updateRuntimeSettings } from "../api";
 import type { RuntimeOptions, RuntimeSettings } from "../types";
 import { useT } from "../i18n";
+import { Badge } from "../components/ui/badge";
 
 type Status = "ok" | "warn" | "off";
 
 function Dot({ status }: { status: Status }) {
-  const color = status === "ok" ? "#47785c" : status === "warn" ? "#81651f" : "#928a80";
+  const color = status === "ok" ? "var(--success)" : status === "warn" ? "var(--warning)" : "var(--text-tertiary)";
   return (
     <span
       style={{
@@ -33,35 +34,19 @@ function FeatureCard({
   badge?: string;
   children: React.ReactNode;
 }) {
-  const badgeColor =
-    status === "ok"
-      ? { bg: "var(--success-soft)", color: "var(--ok)" }
-      : status === "warn"
-      ? { bg: "var(--warning-soft)", color: "var(--warn)" }
-      : { bg: "var(--danger-soft)", color: "var(--err)" };
+  const badgeTone = status === "ok" ? "success" : status === "warn" ? "warning" : "danger";
 
   return (
     <div className="card" style={{ marginBottom: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{title}</h2>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 650 }}>{title}</h2>
         {badge && (
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 800,
-              padding: "2px 9px",
-              borderRadius: 999,
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-              background: badgeColor.bg,
-              color: badgeColor.color,
-            }}
-          >
+          <Badge tone={badgeTone} dot>
             {badge}
-          </span>
+          </Badge>
         )}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{children}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div>
     </div>
   );
 }
@@ -70,8 +55,8 @@ function Row({ label, value, status }: { label: string; value: string; status?: 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
       {status && <Dot status={status} />}
-      <span style={{ fontSize: 12, color: "var(--muted)", minWidth: 130, flexShrink: 0 }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{value}</span>
+      <span style={{ fontSize: 13, color: "var(--muted)", minWidth: 130, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{value}</span>
     </div>
   );
 }
@@ -115,8 +100,8 @@ function Section({ children }: { children: React.ReactNode }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-        gap: 14,
+        gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+        gap: 16,
       }}
     >
       {children}
@@ -247,7 +232,7 @@ export default function FeaturesScreen({ onOpenVoiceSetup }: { onOpenVoiceSetup?
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
         {/* GPU */}
         <Section>

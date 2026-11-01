@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import tts
+from . import music_library, music_mix, tts
 from .audio_bed import prepare_background_audio
 from .renderer import (
     _probe_dimensions,
@@ -129,6 +129,7 @@ def build_workspace(job_id: str, configuration: dict[str, Any] | None, title: st
         "style": default_style(configuration),
         "max_lines": default_max_lines(configuration),
         "original_regions": [],
+        "audio_tracks": [],
         "segments": segments,
         "render": {"status": "idle"},
     }
@@ -234,7 +235,13 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
             )
         ] if text else []
         flagged.append({**segment, "issues": issues, "display": display})
-    return {**workspace, "segments": flagged, "subtitle": layout}
+    return {
+        **workspace,
+        # Workspaces saved before audio tracks existed have none.
+        "audio_tracks": music_mix.normalize_audio_tracks(workspace.get("audio_tracks"), workspace["duration"]),
+        "segments": flagged,
+        "subtitle": layout,
+    }
 
 
 def patch_workspace(
@@ -245,6 +252,8 @@ def patch_workspace(
     style: dict[str, Any] | None = None,
     max_lines: int | None = None,
     original_regions: list[dict[str, Any]] | None = None,
+    audio_tracks: list[dict[str, Any]] | None = None,
+    audio_ops: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     by_id = {segment["id"]: segment for segment in workspace["segments"]}
     for update in segment_updates or []:
@@ -278,6 +287,14 @@ def patch_workspace(
         workspace["max_lines"] = max(1, min(3, int(max_lines)))
     if original_regions is not None:
         workspace["original_regions"] = normalize_regions(original_regions, workspace["duration"])
+    if audio_tracks is not None:
+        workspace["audio_tracks"] = music_mix.normalize_audio_tracks(audio_tracks, workspace["duration"])
+    if audio_ops:
+        workspace["audio_tracks"] = music_mix.apply_ops(
+            music_mix.normalize_audio_tracks(workspace.get("audio_tracks"), workspace["duration"]),
+            audio_ops,
+            workspace["duration"],
+        )
     return save_workspace(workspace)
 
 
@@ -427,18 +444,56 @@ def insert_segment(workspace: dict[str, Any], start: float, end: float, text: st
     return save_workspace(workspace), segment_id
 
 
-def split_segment(workspace: dict[str, Any], segment_id: str, at_char: int | None = None) -> dict[str, Any]:
-    """Split one cue's text into two display cues; the voice stays on the first part."""
+def split_time(start: float, end: float, ratio: float, voice_start: float | None = None, voice_len: float = 0.0) -> float:
+    """Where to cut a cue's timing when its text is split at ``ratio`` of the characters.
+
+    A voiced cue is cut at the same point of its take, not of its display slot: the slot
+    is often much longer than the voice (a pause after it), and cutting the slot would
+    show the second half only after the voice has already said it.
+    """
+    if voice_start is not None and voice_len > 0:
+        middle = voice_start + voice_len * ratio
+    else:
+        middle = start + (end - start) * ratio
+    return round(min(max(middle, start + 0.1), end - 0.1), 3)
+
+
+def split_segment(
+    workspace: dict[str, Any],
+    segment_id: str,
+    at_char: int | None = None,
+    at_time: float | None = None,
+) -> dict[str, Any]:
+    """Split one cue's text into two display cues; the voice stays on the first part.
+
+    ``at_time`` (timeline playhead) cuts the timing exactly there and the text at
+    the word break closest to the same proportion of the line.
+    """
     segments = workspace["segments"]
     position = _position(segments, segment_id)
     segment = segments[position]
     text = segment["text"]
-    cut = _split_index(text, at_char)
+    if at_time is not None:
+        if not segment["start"] + 0.1 <= at_time <= segment["end"] - 0.1:
+            raise ValueError("Đầu phát phải nằm trong cue (cách hai mép ít nhất 0,1 giây).")
+        ratio = (at_time - segment["start"]) / (segment["end"] - segment["start"])
+        cut = _word_break_near(text, ratio)
+    else:
+        cut = _split_index(text, at_char)
     left, right = text[:cut].strip(), text[cut:].strip()
     if not left or not right:
         raise ValueError("Không tìm được chỗ tách: đặt con trỏ vào giữa câu rồi thử lại.")
-    ratio = len(left) / (len(left) + len(right))
-    middle = round(segment["start"] + (segment["end"] - segment["start"]) * ratio, 3)
+    if at_time is not None:
+        middle = round(float(at_time), 3)
+    else:
+        voiced = bool(segment.get("audio_url")) and float(segment.get("audio_duration") or 0) > 0
+        middle = split_time(
+            segment["start"],
+            segment["end"],
+            len(left) / (len(left) + len(right)),
+            float(segment.get("audio_start", segment["start"])) if voiced else None,
+            float(segment.get("audio_duration") or 0) if voiced else 0.0,
+        )
     owner = segment.get("shares_audio_with") or (segment["id"] if segment.get("audio_url") else None)
     part = {
         "id": f"seg-{uuid.uuid4().hex[:8]}",
@@ -487,6 +542,79 @@ def delete_segment(workspace: dict[str, Any], segment_id: str) -> dict[str, Any]
     workspace["segments"].remove(segment)
     _release_shared_audio(workspace, segment)
     return save_workspace(workspace)
+
+
+def delete_segments(workspace: dict[str, Any], segment_ids: list[str]) -> dict[str, Any]:
+    """Remove several cues in one save (timeline multi-select); unknown ids are ignored."""
+    wanted = set(segment_ids)
+    removed = [segment for segment in workspace["segments"] if segment["id"] in wanted]
+    workspace["segments"] = [segment for segment in workspace["segments"] if segment["id"] not in wanted]
+    for segment in removed:
+        _release_shared_audio(workspace, segment)
+    return save_workspace(workspace)
+
+
+THUMBNAIL_HEIGHT = 72
+MAX_THUMBNAILS = 120
+
+
+def thumbnails(workspace: dict[str, Any]) -> dict[str, Any]:
+    """Filmstrip for the timeline video track: one JPEG sprite of evenly spaced frames, cached.
+
+    Only keyframes are decoded, so even long videos take a second or two; a frame
+    therefore shows the nearest keyframe at or before its time.
+    """
+    import tempfile
+
+    directory = workspace_dir(workspace["job_id"])
+    meta_path = directory / "thumbs.json"
+    sprite = directory / "thumbs.jpg"
+    if meta_path.exists() and sprite.exists():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    video = _path_from_storage_url(workspace["video_url"])
+    if not video or not video.exists():
+        raise FileNotFoundError("Không tìm thấy video gốc của job này.")
+    duration = max(0.1, float(workspace.get("duration") or 0))
+    interval = round(max(1.0, duration / MAX_THUMBNAILS), 3)
+    with tempfile.TemporaryDirectory(dir=directory) as tmp:
+        frames: list[Path] = []
+        for fast in (True, False):  # Some streams have no usable keyframe flags: decode them fully.
+            command = ["ffmpeg", "-v", "error", "-y"]
+            if fast:
+                command += ["-skip_frame", "nokey"]
+            command += [
+                "-i", str(video), "-an", "-sn",
+                "-vf", f"fps=1/{interval},scale=-2:{THUMBNAIL_HEIGHT}",
+                "-frames:v", str(MAX_THUMBNAILS + 1), "-q:v", "6",
+                str(Path(tmp) / "f%04d.jpg"),
+            ]
+            subprocess.run(command, capture_output=True, timeout=300)
+            frames = sorted(Path(tmp).glob("f*.jpg"))
+            if frames:
+                break
+        if not frames:
+            raise RuntimeError("Không tạo được ảnh xem trước cho video.")
+        count = len(frames)
+        tiled = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-i", str(Path(tmp) / "f%04d.jpg"),
+                "-vf", f"tile={count}x1", "-frames:v", "1", "-q:v", "6", str(sprite),
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+        if tiled.returncode != 0 or not sprite.exists():
+            raise RuntimeError("Không ghép được ảnh xem trước cho video.")
+        width, height = _probe_dimensions(frames[0])
+    data = {
+        "url": _storage_url(sprite),
+        "count": count,
+        "interval": interval,
+        "width": width,
+        "height": height,
+    }
+    meta_path.write_text(json.dumps(data), encoding="utf-8")
+    return data
 
 
 def regenerate_segment_audio(
@@ -594,6 +722,13 @@ def _position(segments: list[dict[str, Any]], segment_id: str) -> int:
     return position
 
 
+def _word_break_near(text: str, ratio: float) -> int:
+    """Index of the space closest to ``ratio`` of the text (0 when there is none)."""
+    target = len(text) * max(0.0, min(1.0, ratio))
+    spaces = [i for i, char in enumerate(text) if char.isspace() and text[:i].strip() and text[i:].strip()]
+    return int(min(spaces, key=lambda i: abs(i - target))) if spaces else 0
+
+
 def _split_index(text: str, at_char: int | None) -> int:
     """Use the caret when given, else the clause break (or space) nearest the middle."""
     if at_char is not None and 0 < at_char < len(text):
@@ -645,7 +780,7 @@ def retranslate_segment(
     return save_workspace(workspace)
 
 
-EDITABLE_KEYS = ("segments", "blur", "audio", "style", "max_lines", "original_regions")
+EDITABLE_KEYS = ("segments", "blur", "audio", "style", "max_lines", "original_regions", "audio_tracks")
 _DERIVED_SEGMENT_KEYS = {"issues", "display"}
 
 
@@ -664,6 +799,8 @@ def replace_state(workspace: dict[str, Any], state: dict[str, Any]) -> dict[str,
     workspace["style"] = _text_style(normalize_subtitle_style(state["style"]))
     workspace["max_lines"] = max(1, min(3, int(state["max_lines"])))
     workspace["original_regions"] = normalize_regions(state["original_regions"], workspace["duration"])
+    if state.get("audio_tracks") is not None:  # Older clients' snapshots have no audio tracks.
+        workspace["audio_tracks"] = music_mix.normalize_audio_tracks(state["audio_tracks"], workspace["duration"])
     return save_workspace(workspace)
 
 
@@ -789,6 +926,10 @@ def render_workspace(
         voice_track = workdir / "voice.mp3"
         tts._mix_timed_audio(timed, voice_track, workdir / "voice-filter.txt", workspace["duration"])
 
+    # Music / sound-effect tracks: pre-mixed (with ducking under the voice) into one file.
+    # A missing library asset raises here, before the long video encode starts.
+    music_track = music_mix.render_music_track(workspace, workdir / "music.flac", music_library.asset_path)
+
     subtitle = write_srt(workspace, workdir / "subtitles.srt") if burn_subtitles else None
     # Without a dub the full source audio (original voices included) is kept, not the vocal-free bed.
     audio_bed = (
@@ -813,6 +954,7 @@ def render_workspace(
         aspect_ratio=(output.get("output") or {}).get("aspect_ratio", "source"),
         max_lines=workspace["max_lines"],
         output_filename=f"{job_id}-edit-{uuid.uuid4().hex[:6]}.mp4",
+        **({"music_audio_path": music_track} if music_track else {}),
     )
 
 

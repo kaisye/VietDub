@@ -4,6 +4,10 @@ import type {
   EditorAudio,
   EditorBlur,
   EditorRegion,
+  EditorAudioTrack,
+  MusicAsset,
+  MusicCredits,
+  OnlineTrack,
   EditorSegmentPatch,
   EditorStyle,
   EditorWorkspace,
@@ -291,6 +295,7 @@ export const patchEditorWorkspace = (
     style?: Partial<EditorStyle>;
     max_lines?: number;
     original_regions?: EditorRegion[];
+    audio_tracks?: EditorAudioTrack[];
   },
 ) =>
   request<EditorWorkspace>(`/jobs/${id}/editor`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -304,11 +309,24 @@ export const insertEditorSegment = (id: string, start: number, end: number, text
 export const deleteEditorSegment = (id: string, segmentId: string) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}`, { method: "DELETE" });
 
-export const splitEditorSegment = (id: string, segmentId: string, atChar: number | null) =>
+export const splitEditorSegment = (id: string, segmentId: string, atChar: number | null, atTime?: number) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/split`, {
     method: "POST",
-    body: JSON.stringify({ at_char: atChar }),
+    // at_time (timeline playhead) cuts the timing exactly there; at_char is the text caret.
+    body: JSON.stringify(atTime === undefined ? { at_char: atChar } : { at_char: null, at_time: atTime }),
   });
+
+/** Deletes several cues in one save (timeline multi-select). */
+export const deleteEditorSegments = (id: string, segmentIds: string[]) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/segments/delete`, {
+    method: "POST",
+    body: JSON.stringify({ ids: segmentIds }),
+  });
+
+export type EditorThumbnails = { url: string; count: number; interval: number; width: number; height: number };
+
+/** Filmstrip sprite for the timeline video track: `count` frames of width×height, one every `interval` s. */
+export const getEditorThumbnails = (id: string) => request<EditorThumbnails>(`/jobs/${id}/editor/thumbnails`);
 
 export const mergeEditorSegmentWithNext = (id: string, segmentId: string) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/merge-next`, { method: "POST" });
@@ -318,7 +336,7 @@ export const swapEditorSegmentAudio = (id: string, segmentId: string) =>
 
 export type EditorEditableState = Pick<
   EditorWorkspace,
-  "segments" | "blur" | "audio" | "style" | "max_lines" | "original_regions"
+  "segments" | "blur" | "audio" | "style" | "max_lines" | "original_regions" | "audio_tracks"
 >;
 
 export const putEditorState = (id: string, state: EditorEditableState) =>
@@ -422,3 +440,69 @@ export function outputUrl(path?: string | null): string | null {
   if (path.startsWith("http")) return path;
   return `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
 }
+
+// --- Editor audio tracks & music library ---------------------------------------
+export type MusicLibraryList = { items: MusicAsset[]; tags: string[]; total: number };
+export type OnlineSearch = { items: OnlineTrack[]; page: number; page_count: number | null; result_count: number | null };
+export type MusicSettings = { jamendo_configured: boolean; jamendo_client_id: string };
+
+export const listMusic = (params: { q?: string; tag?: string; kind?: string } = {}) =>
+  request<MusicLibraryList>(`/music-library?${new URLSearchParams(params as Record<string, string>)}`, { cache: "no-store" });
+
+export async function uploadMusic(files: File[], kind: "music" | "sfx" = "music") {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  form.append("kind", kind);
+  const response = await fetch(`${API_BASE_URL}/music-library/upload`, { method: "POST", body: form });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as { items: MusicAsset[]; errors: { filename: string; error: string }[] };
+}
+
+export const patchMusic = (id: string, patch: Partial<Pick<MusicAsset, "title" | "artist" | "tags" | "kind" | "attribution">>) =>
+  request<MusicAsset>(`/music-library/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+
+export const deleteMusic = (id: string) => request<void>(`/music-library/${id}`, { method: "DELETE" });
+
+export const getMusicPeaks = (id: string) => request<{ rate: number; peaks: number[] }>(`/music-library/${id}/peaks`);
+
+export const searchOpenverse = (params: { q: string; category: "music" | "sound_effect" | "any"; commercial_only: boolean; page?: number }) =>
+  request<OnlineSearch>(
+    `/music-library/openverse/search?${new URLSearchParams({
+      q: params.q,
+      category: params.category,
+      commercial_only: String(params.commercial_only),
+      page: String(params.page ?? 1),
+    })}`,
+  );
+
+export const importOpenverse = (id: string) =>
+  request<MusicAsset>("/music-library/openverse/import", { method: "POST", body: JSON.stringify({ id }) });
+
+export const searchJamendo = (params: { q: string; commercial_only: boolean; page?: number }) =>
+  request<OnlineSearch>(
+    `/music-library/jamendo/search?${new URLSearchParams({
+      q: params.q,
+      commercial_only: String(params.commercial_only),
+      page: String(params.page ?? 1),
+    })}`,
+  );
+
+export const importJamendo = (id: string) =>
+  request<MusicAsset>("/music-library/jamendo/import", { method: "POST", body: JSON.stringify({ id }) });
+
+export const getMusicSettings = () => request<MusicSettings>("/music-library/settings", { cache: "no-store" });
+
+export const saveMusicSettings = (patch: { jamendo_client_id: string }) =>
+  request<MusicSettings>("/music-library/settings", { method: "PUT", body: JSON.stringify(patch) });
+
+export const getMusicCredits = (jobId: string, lang: "vi" | "en") =>
+  request<MusicCredits>(`/jobs/${jobId}/editor/music-credits?lang=${lang}`, { cache: "no-store" });

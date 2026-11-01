@@ -2,7 +2,9 @@ import { outputUrl } from "../api";
 import type { EditorSegment } from "../types";
 
 const LOOKAHEAD = 8; // seconds of upcoming voice cues decoded ahead of the playhead
-const MAX_DRIFT = 0.12; // re-sync only when the voice is this far from the video
+const MAX_DRIFT = 0.12; // re-sync only when the voice is this far from the video…
+const DRIFT_FRAMES = 4; // …for this many frames in a row (video clock jitter / start-up)
+const JUMP = 0.35; // a drift this large is a seek: re-sync at once
 const CACHE_SIZE = 40;
 
 type Playing = { key: string; source: AudioBufferSourceNode; ctxStart: number; offset: number };
@@ -19,9 +21,12 @@ export class DubPlayer {
   private ctx: AudioContext | null = null;
   private gain: GainNode | null = null;
   private volume = 1;
+  // Shuttle speed (J/K/L): takes play faster too, so they stay on the video's clock.
+  private rate = 1;
   private buffers = new Map<string, AudioBuffer | null>();
   private loading = new Map<string, Promise<void>>();
   private playing: Playing | null = null;
+  private driftFrames = 0;
   private lastPrefetch = -1;
   // Detects a context whose clock stopped (macOS output device change, sleep): it is then rebuilt.
   private lastClock = { ctx: 0, wall: 0 };
@@ -42,7 +47,22 @@ export class DubPlayer {
     if (this.gain) this.gain.gain.value = this.volume;
   }
 
-  /** Called every animation frame while the video plays. */
+  setRate(rate: number): void {
+    if (rate === this.rate) return;
+    this.rate = rate;
+    this.stop(); // Restarted on the next frame at the new speed and offset.
+  }
+
+  /**
+   * Timeline position heard right now when the video shows `t`: Web Audio is heard only
+   * after the output latency (large on Bluetooth), so voice cues are picked this far ahead
+   * and start on time instead of losing their first syllable.
+   */
+  heardTime(t: number): number {
+    return t + this.latency() * this.rate;
+  }
+
+  /** Called every animation frame while the video plays; `seg` is the cue at heardTime(t). */
   sync(segments: EditorSegment[], seg: EditorSegment | null, t: number, isPlaying: boolean): void {
     if (!isPlaying || !this.ctx) {
       this.stop();
@@ -60,13 +80,18 @@ export class DubPlayer {
       return;
     }
     const key = `${seg.id}|${url}|${seg.audio_start}`;
-    // The video shows the frame you hear; Web Audio is heard only after the output latency
-    // (large on Bluetooth headphones), so start that much further into the take.
-    const offset = t - seg.audio_start + this.latency();
+    const offset = this.heardTime(t) - seg.audio_start;
     if (this.playing?.key === key) {
-      const position = this.ctx.currentTime - this.playing.ctxStart + this.playing.offset;
-      if (Math.abs(position - offset) <= MAX_DRIFT) return;
+      const position = (this.ctx.currentTime - this.playing.ctxStart) * this.rate + this.playing.offset;
+      const drift = Math.abs(position - offset);
+      // A one-off mismatch is the video's coarse clock, not real drift; restarting the take
+      // for it is heard as a stutter (it replays the start of the cue).
+      if (drift <= MAX_DRIFT || (drift < JUMP && ++this.driftFrames < DRIFT_FRAMES)) {
+        if (drift <= MAX_DRIFT) this.driftFrames = 0;
+        return;
+      }
     }
+    this.driftFrames = 0;
     this.stop();
     const buffer = this.buffers.get(url);
     if (buffer === undefined) {
@@ -77,6 +102,7 @@ export class DubPlayer {
     if (!buffer || offset >= buffer.duration) return;
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
+    source.playbackRate.value = this.rate;
     source.connect(this.gain!);
     source.start(0, Math.max(0, offset));
     this.playing = { key, source, ctxStart: this.ctx.currentTime, offset: Math.max(0, offset) };

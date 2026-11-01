@@ -1067,13 +1067,13 @@ function WaveformTrimmer({
       peaks.forEach((peak, index) => {
         const x = (index / Math.max(1, peaks.length - 1)) * width;
         const selected = x / width >= startRatio && x / width <= endRatio;
-        context.fillStyle = selected ? "#c85f28" : "#b7aca4";
+        context.fillStyle = selected ? "#2563eb" : "#b8c2d1";
         const barHeight = Math.max(3, peak * (height - 18));
         context.fillRect(x, center - barHeight / 2, barWidth, barHeight);
       });
       if (playing && duration > 0) {
         const x = Math.min(width, Math.max(0, currentTime / duration * width));
-        context.fillStyle = "#171311";
+        context.fillStyle = "#0b1730";
         context.fillRect(x - 1, 5, 2, height - 10);
       }
     };
@@ -2034,12 +2034,13 @@ export default function VoiceConfigScreen({ onBack }: { onBack: () => void }) {
                   : "";
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: "6px 14px",
-    border: "1px solid var(--border)",
-    borderRadius: 6,
-    background: active ? "var(--primary)" : "var(--surface)",
-    color: active ? "#fff" : "var(--text-primary)",
-    fontWeight: active ? 600 : 400,
+    padding: "7px 14px",
+    border: `1px solid ${active ? "var(--primary-soft-strong)" : "var(--border)"}`,
+    borderRadius: 8,
+    background: active ? "var(--primary-soft)" : "var(--surface)",
+    color: active ? "var(--primary-hover)" : "var(--text-secondary)",
+    fontWeight: active ? 600 : 500,
+    boxShadow: active ? "none" : "var(--shadow-xs)",
     cursor: "pointer",
     fontSize: 13,
     display: "flex",

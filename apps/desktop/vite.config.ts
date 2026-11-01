@@ -24,6 +24,8 @@ export default defineConfig({
       "/videos": "http://127.0.0.1:8386",
       "/storage": "http://127.0.0.1:8386",
       "/colab": "http://127.0.0.1:8386",
+      "/api": "http://127.0.0.1:8386",
+      "/music-library": "http://127.0.0.1:8386",
     },
   },
 });

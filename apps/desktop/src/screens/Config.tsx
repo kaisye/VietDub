@@ -190,7 +190,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
 
   if (!settings) {
     return (
-      <div className="page">
+      <div className="page page-form">
         {error ? <div className="banner err">{error}</div> : <p className="muted">{t.loading}</p>}
       </div>
     );
@@ -202,7 +202,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
       : t.gpu_not_found;
 
   return (
-    <div className="page">
+    <div className="page page-form">
       <h1>{t.config_title}</h1>
       <p className="sub">{t.config_sub}</p>
 
@@ -219,7 +219,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
               onClick={(e) => { e.preventDefault(); void openUrl("https://build.nvidia.com/settings/api-keys"); }}
               style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
             >
-              Đăng ký / Lấy key →
+              {lang === "vi" ? "Đăng ký / Lấy key →" : "Sign up / Get key →"}
             </a>
           </div>
           <input
@@ -251,7 +251,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
               onClick={(e) => { e.preventDefault(); void openUrl("https://console.groq.com/keys"); }}
               style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
             >
-              Đăng ký / Lấy key →
+              {lang === "vi" ? "Đăng ký / Lấy key →" : "Sign up / Get key →"}
             </a>
           </div>
           <input
@@ -283,7 +283,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
               onClick={(e) => { e.preventDefault(); void openUrl("https://console.soniox.com"); }}
               style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
             >
-              Đăng ký / Lấy key →
+              {lang === "vi" ? "Đăng ký / Lấy key →" : "Sign up / Get key →"}
             </a>
           </div>
           <input
@@ -356,7 +356,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
               setRouterStatus(null);
             }}
           >
-            <option value="openai-compatible">9router (cục bộ)</option>
+            <option value="openai-compatible">{lang === "vi" ? "9router (cục bộ)" : "9router (local)"}</option>
             <option value="openrouter">OpenRouter (cloud)</option>
           </select>
         </div>
@@ -370,7 +370,7 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
                   onClick={(e) => { e.preventDefault(); void openUrl("https://openrouter.ai/keys"); }}
                   style={{ fontSize: 11, fontWeight: 600, color: "var(--primary-hover)", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}
                 >
-                  Đăng ký / Lấy key →
+                  {lang === "vi" ? "Đăng ký / Lấy key →" : "Sign up / Get key →"}
                 </a>
               </div>
               <input
@@ -412,9 +412,17 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
             type="password"
             value={routerKey}
             onChange={(e) => setRouterKey(e.target.value)}
-            placeholder={settings.local_translation_api_key_configured ? "Đã lưu key — nhập để thay" : "sk-... (lấy trong dashboard 9router)"}
+            placeholder={
+              settings.local_translation_api_key_configured
+                ? lang === "vi" ? "Đã lưu key — nhập để thay" : "Key saved — type to replace"
+                : lang === "vi" ? "sk-... (lấy trong dashboard 9router)" : "sk-... (from the 9router dashboard)"
+            }
           />
-          <div className="hint">Chỉ cần khi 9router bật "Require API key". Sao chép key trong dashboard 9router.</div>
+          <div className="hint">
+            {lang === "vi"
+              ? "Chỉ cần khi 9router bật \"Require API key\". Sao chép key trong dashboard 9router."
+              : "Only needed when 9router has \"Require API key\" enabled. Copy the key from the 9router dashboard."}
+          </div>
         </div>
         <div className="field">
           <label>{t.translation_model}</label>
@@ -446,11 +454,13 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         ) : null}
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn" disabled={checkingRouter} onClick={() => void checkRouterConfiguration()}>
-            {checkingRouter ? "Đang kiểm tra…" : "Lưu & kiểm tra kết nối"}
+            {checkingRouter
+              ? lang === "vi" ? "Đang kiểm tra…" : "Checking…"
+              : lang === "vi" ? "Lưu & kiểm tra kết nối" : "Save & test connection"}
           </button>
           {usingOpenRouter ? null : (
             <button className="btn" onClick={() => void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`)}>
-              Mở dashboard 9router
+              {lang === "vi" ? "Mở dashboard 9router" : "Open 9router dashboard"}
             </button>
           )}
         </div>
@@ -533,8 +543,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
         <h2>{lang === "vi" ? "Dung lượng & dữ liệu" : "Storage & data"}</h2>
         <p className="hint" style={{ marginTop: -4 }}>
           {lang === "vi"
-            ? "Quản lý các file được tạo bởi VietDub. Xóa dữ liệu công việc trong Lịch sử sẽ xóa cả file liên quan."
-            : "Manage files generated by VietDub. Deleting a History item also removes its associated files."}
+            ? "Quản lý các file được tạo bởi VietDub. Xóa một dự án sẽ xóa cả file liên quan."
+            : "Manage files generated by VietDub. Deleting a project also removes its associated files."}
         </p>
         {storage ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, margin: "14px 0" }}>
@@ -612,14 +622,14 @@ type NineRouterPhase =
   | "idle" | "checking" | "starting" | "installing" | "waiting" | "running" | "error";
 
 const NINE_ROUTER_ENDPOINT = "http://localhost:20128";
-const PHASE_LABEL: Record<NineRouterPhase, string> = {
-  idle:       "",
-  checking:   "Đang kiểm tra...",
-  starting:   "Đang khởi động 9router...",
-  installing: "Đang cài đặt qua npm (1-2 phút)...",
-  waiting:    "Chờ 9router khởi động...",
-  running:    "",
-  error:      "",
+const PHASE_LABEL: Record<NineRouterPhase, [vi: string, en: string]> = {
+  idle:       ["", ""],
+  checking:   ["Đang kiểm tra…", "Checking…"],
+  starting:   ["Đang khởi động 9router…", "Starting 9router…"],
+  installing: ["Đang cài đặt qua npm (1-2 phút)…", "Installing via npm (1-2 minutes)…"],
+  waiting:    ["Chờ 9router khởi động…", "Waiting for 9router to start…"],
+  running:    ["", ""],
+  error:      ["", ""],
 };
 
 async function ping9router(): Promise<boolean> {
@@ -639,6 +649,8 @@ async function waitFor9router(maxAttempts = 15): Promise<boolean> {
 }
 
 function NineRouterSetup({ onReady }: { onReady: () => void }) {
+  const { lang } = useT();
+  const L = (vi: string, en: string) => (lang === "vi" ? vi : en);
   const [phase, setPhase] = useState<NineRouterPhase>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const onReadyRef = useRef(onReady);
@@ -707,7 +719,12 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
       void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`);
     } else {
       setPhase("error");
-      setErrorMsg("9router đã khởi động nhưng chưa phản hồi. Thử mở http://localhost:20128 thủ công.");
+      setErrorMsg(
+        L(
+          "9router đã khởi động nhưng chưa phản hồi. Thử mở http://localhost:20128 thủ công.",
+          "9router started but is not responding yet. Try opening http://localhost:20128 manually.",
+        ),
+      );
     }
   }
 
@@ -718,16 +735,16 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
       marginBottom: 14,
       padding: "10px 14px",
       borderRadius: 8,
-      border: `1px solid ${phase === "running" ? "#86efac" : phase === "error" ? "#fca5a5" : "var(--border)"}`,
-      background: phase === "running" ? "#f0fdf4" : phase === "error" ? "#fff5f5" : "var(--surface-muted)",
+      border: `1px solid ${phase === "running" ? "var(--success-border)" : phase === "error" ? "var(--danger-border)" : "var(--border)"}`,
+      background: phase === "running" ? "var(--success-soft)" : phase === "error" ? "var(--danger-soft)" : "var(--surface-muted)",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 600 }}>
           {phase === "running"
-            ? "🟢 9router đang chạy"
+            ? L("9router đang chạy", "9router is running")
             : phase === "error"
-            ? "🔴 Lỗi cài đặt 9router"
-            : "9router — tự động cài đặt"}
+            ? L("Lỗi cài đặt 9router", "9router setup failed")
+            : L("9router — tự động cài đặt", "9router — automatic setup")}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
           {phase === "running" && (
@@ -736,7 +753,7 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
               style={{ fontSize: 12, padding: "3px 10px" }}
               onClick={() => void openUrl(`${NINE_ROUTER_ENDPOINT}/dashboard`)}
             >
-              Mở dashboard →
+              {L("Mở dashboard →", "Open dashboard →")}
             </button>
           )}
           {(phase === "idle" || phase === "error") && (
@@ -745,21 +762,24 @@ function NineRouterSetup({ onReady }: { onReady: () => void }) {
               style={{ fontSize: 12, padding: "3px 10px" }}
               onClick={() => void setup()}
             >
-              {phase === "error" ? "Thử lại" : "Setup"}
+              {phase === "error" ? L("Thử lại", "Retry") : L("Cài đặt", "Set up")}
             </button>
           )}
           {busy && (
-            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>⏳ {PHASE_LABEL[phase]}</span>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{L(...PHASE_LABEL[phase])}</span>
           )}
         </div>
       </div>
       {phase === "running" && (
-        <p style={{ margin: "6px 0 0", fontSize: 11, color: "#16a34a" }}>
-          Endpoint đã được điền tự động. Vào dashboard để lấy API key và chọn model.
+        <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--success)" }}>
+          {L(
+            "Endpoint đã được điền tự động. Vào dashboard để lấy API key và chọn model.",
+            "The endpoint was filled in automatically. Open the dashboard to get an API key and pick a model.",
+          )}
         </p>
       )}
       {errorMsg && (
-        <p style={{ margin: "6px 0 0", fontSize: 12, color: "#dc2626", whiteSpace: "pre-wrap" }}>{errorMsg}</p>
+        <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{errorMsg}</p>
       )}
     </div>
   );

@@ -904,6 +904,33 @@ def _continue_after_translation(
     _persist_job_log(job)
     db.commit()
     clear_progress(job.id)
+    _start_auto_review(db, job, configuration)
+
+
+def _start_auto_review(db: Session, job: MediaJob, configuration: ProductionConfiguration | None) -> None:
+    """Kick off the post-dub auto review in the background. Never fails the job."""
+    try:
+        mode = configuration.workflow.auto_review if configuration else "propose"
+        if mode == "off":
+            return
+        from .services.auto_review import runner as auto_review
+
+        auto_review.start_review(
+            job.id,
+            mode=mode,
+            configuration=configuration.model_dump(mode="json") if configuration else None,
+            title=job.source_title or "",
+            source_language=job.source_language or "auto",
+            voice_settings=editor_voice_settings(job),
+            trigger="pipeline",
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            job.logs = append_log(job.logs, f"Auto review could not start: {exc}")
+            _persist_job_log(job)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
 
 
 def _resume_after_translation(

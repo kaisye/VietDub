@@ -52,6 +52,7 @@ from .schemas import (
     EditorStateRequest,
     EditorPatchRequest,
     EditorSplitRequest,
+    EditorBatchDeleteRequest,
     MediaJobVoiceRerenderRequest,
     ColabAccountSwitchIn,
     ColabAccountsOut,
@@ -138,7 +139,7 @@ from .services.storage import (
     remove_job_artifacts,
     storage_usage,
 )
-from .services import editor
+from .services import editor, music_mix
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
     apply_runtime_secrets_to_env,
@@ -452,6 +453,18 @@ def _backup_sqlite_before_platform_migration() -> None:
 app = FastAPI(title="Aether Studio API", version="0.1.0", lifespan=lifespan)
 app.mount("/storage", StaticFiles(directory=str(ensure_storage())), name="storage")
 app.include_router(production_router)
+from .assistant_api import router as assistant_router  # noqa: E402
+app.include_router(assistant_router)
+from .channels_api import router as channels_router  # noqa: E402
+app.include_router(channels_router)
+from .calendar_api import router as calendar_router  # noqa: E402
+app.include_router(calendar_router)
+from .viral_api import router as viral_router  # noqa: E402
+app.include_router(viral_router)
+from .auto_review_api import router as auto_review_router  # noqa: E402
+app.include_router(auto_review_router)
+from .music_api import router as music_router  # noqa: E402
+app.include_router(music_router)
 
 web_origin = os.getenv("WEB_ORIGIN", "http://localhost:3000")
 _extra_origins = [
@@ -1353,15 +1366,25 @@ def apply_video_metadata(job: MediaJob) -> None:
         job.thumbnail_url = metadata.thumbnail_url
 
 
+# Source URLs whose metadata lookup already ran in this process without filling in the
+# missing title/thumbnail (e.g. Douyin pages yt-dlp can't parse). GET /jobs is polled by
+# several screens; without this every call re-ran yt-dlp for them (~0.5 s each).
+_METADATA_LOOKUP_DONE: set[str] = set()
+
+
 def hydrate_missing_metadata(db: Session, jobs: list[MediaJob]) -> None:
     changed = False
     for job in jobs[:12]:
         if job.source_title and job.thumbnail_url:
             continue
+        if job.video_url in _METADATA_LOOKUP_DONE:
+            continue
         before = (job.source_title, job.thumbnail_url)
         apply_video_metadata(job)
         if before != (job.source_title, job.thumbnail_url):
             changed = True
+        elif job.video_url:
+            _METADATA_LOOKUP_DONE.add(job.video_url)
     if changed:
         db.commit()
 
@@ -1951,8 +1974,18 @@ def patch_editor_workspace(
 ) -> dict:
     job = _editor_job(job_id, db)
     with editor.workspace_lock(job_id):
+        workspace = _editor_workspace(job)
+        if payload.audio_ops:
+            try:  # Validate the granular audio-track edits before anything is saved.
+                music_mix.apply_ops(
+                    music_mix.normalize_audio_tracks(workspace.get("audio_tracks"), workspace["duration"]),
+                    payload.audio_ops,
+                    workspace["duration"],
+                )
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=f"Không áp dụng được thao tác track âm thanh: {exc}") from exc
         workspace = editor.patch_workspace(
-            _editor_workspace(job),
+            workspace,
             [segment.model_dump(exclude_unset=True) for segment in payload.segments],
             payload.blur.model_dump(exclude_none=True) if payload.blur else None,
             payload.audio.model_dump(exclude_none=True) if payload.audio else None,
@@ -1961,6 +1994,8 @@ def patch_editor_workspace(
             [region.model_dump() for region in payload.original_regions]
             if payload.original_regions is not None
             else None,
+            payload.audio_tracks,
+            payload.audio_ops,
         )
         return editor.with_issues(workspace)
 
@@ -1975,6 +2010,30 @@ def insert_editor_segment(
             _editor_workspace(job), payload.start, payload.end, payload.text
         )
         return {**editor.with_issues(workspace), "created_id": segment_id}
+
+
+@app.post("/jobs/{job_id}/editor/segments/delete")
+def delete_editor_segments(
+    job_id: str, payload: EditorBatchDeleteRequest, db: Session = Depends(get_db)
+) -> dict:
+    """Delete several cues at once (timeline multi-select) in a single save."""
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        return editor.with_issues(editor.delete_segments(_editor_workspace(job), payload.ids))
+
+
+@app.get("/jobs/{job_id}/editor/thumbnails")
+def get_editor_thumbnails(job_id: str, db: Session = Depends(get_db)) -> dict:
+    """Filmstrip sprite for the timeline video track (generated once, then cached)."""
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace = _editor_workspace(job)
+    try:
+        return editor.thumbnails(workspace)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.delete("/jobs/{job_id}/editor/segments/{segment_id}")
@@ -2056,7 +2115,9 @@ def split_editor_segment(
     job = _editor_job(job_id, db)
     with editor.workspace_lock(job_id):
         try:
-            workspace = editor.split_segment(_editor_workspace(job), segment_id, payload.at_char)
+            workspace = editor.split_segment(
+                _editor_workspace(job), segment_id, payload.at_char, payload.at_time
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Segment not found.") from exc
         except ValueError as exc:

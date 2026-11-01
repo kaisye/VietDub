@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio_bed import background_volume, tts_volume
+from .auto_review.vi_text import break_penalty
 from .storage import ensure_storage
 
 DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
@@ -69,8 +70,13 @@ def render_video(
     aspect_ratio: str = "source",
     max_lines: int = 2,
     output_filename: str | None = None,
+    music_audio_path: Path | None = None,
 ) -> Path:
-    """Render a real MP4 output with the generated voice and subtitles."""
+    """Render a real MP4 output with the generated voice and subtitles.
+
+    ``music_audio_path`` (editor audio tracks, already ducked and timed) is added on top
+    of the usual voice / original-audio mix; without it the command is unchanged.
+    """
     root = ensure_storage()
     safe_output_name = Path(output_filename).name if output_filename else f"{video_path.stem}.mp4"
     if Path(safe_output_name).suffix.lower() != ".mp4":
@@ -99,8 +105,15 @@ def render_video(
         command.extend(["-i", str(audio_path)])
     if background_audio_path:
         background_input_index = next_input_index
+        next_input_index += 1
         command.extend(["-i", str(background_audio_path)])
-    command.extend(["-map", "0:v:0", *_audio_map_args(voice_input_index, background_input_index, audio_mix)])
+    music_input_index: int | None = None
+    if music_audio_path:
+        music_input_index = next_input_index
+        command.extend(["-i", str(music_audio_path)])
+    command.extend(
+        ["-map", "0:v:0", *_with_music(_audio_map_args(voice_input_index, background_input_index, audio_mix), music_input_index)]
+    )
 
     video_filter = _video_filter(
         video_path,
@@ -133,6 +146,7 @@ def render_video(
         aspect_ratio,
         configured_subtitle_style,
         max_lines=max_lines,
+        music_audio_path=music_audio_path,
     )
 
 
@@ -284,6 +298,7 @@ def _render_with_subtitle_track(
     aspect_ratio: str = "source",
     subtitle_style: dict[str, Any] | None = None,
     max_lines: int = 2,
+    music_audio_path: Path | None = None,
 ) -> Path:
     video_duration = _probe_duration(video_path)
     video_encoding_args, audio_bitrate = _render_quality_args(render_quality)
@@ -305,8 +320,15 @@ def _render_with_subtitle_track(
     background_input_index: int | None = None
     if background_audio_path:
         background_input_index = next_input_index
+        next_input_index += 1
         command.extend(["-i", str(background_audio_path)])
-    command.extend(["-map", "0:v:0", *_audio_map_args(voice_input_index, background_input_index, audio_mix)])
+    music_input_index: int | None = None
+    if music_audio_path:
+        music_input_index = next_input_index
+        command.extend(["-i", str(music_audio_path)])
+    command.extend(
+        ["-map", "0:v:0", *_with_music(_audio_map_args(voice_input_index, background_input_index, audio_mix), music_input_index)]
+    )
     command.extend(["-map", f"{subtitle_input_index}:0"])
     video_filter = _video_filter(video_path, None, subtitle_style, aspect_ratio, max_lines=max_lines)
     if video_filter:
@@ -798,8 +820,9 @@ def _balanced_ass_wrap(
     slack = max(2, min(8, round(chars_per_line * 0.12)))
     limit = chars_per_line + slack
     text_length = len(" ".join(words))
-    # Text fits on a single line — no split needed.
-    if text_length <= limit:
+    # Text fits on a single line — no split needed. (Between chars_per_line and the
+    # slack limit the greedy wrap would push only the last word down, so balance it.)
+    if text_length <= chars_per_line:
         return None
     if text_length > max_lines * limit:
         return None
@@ -815,7 +838,10 @@ def _balanced_ass_wrap(
 
         overflow = sum(max(0, length - chars_per_line) for length in lengths)
         balance = abs(lengths[0] - lengths[1])
-        candidates.append((overflow * 10 + balance, split_index, lines))
+        # Phrase-aware: never end the top line on "của / và / những…", never split
+        # "Trung | Quốc" or "10 | năm"; prefer breaking after a comma.
+        phrase, _ = break_penalty(words[split_index - 1], words[split_index])
+        candidates.append((overflow * 10 + balance + phrase * 1.5, split_index, lines))
 
     if not candidates:
         return None
@@ -1101,6 +1127,27 @@ def _audio_map_args(
     else:
         return ["-map", "0:a:0?"]
     return ["-filter_complex", graph, "-map", "[aout]"]
+
+
+def _with_music(args: list[str], music_input_index: int | None) -> list[str]:
+    """Add the editor's pre-mixed music track to whatever audio ``_audio_map_args`` chose.
+
+    The music is summed (no normalization, so voice and bed levels are unchanged) and a
+    limiter keeps the sum from clipping.
+    """
+    if music_input_index is None:
+        return args
+    music = f"[{music_input_index}:a]"
+    mix = "amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]"
+    if "-filter_complex" in args:
+        graph = args[args.index("-filter_complex") + 1]
+        graph = graph[: graph.rindex("[aout]")] + "[premix]"
+        return ["-filter_complex", f"{graph};[premix]{music}{mix}", "-map", "[aout]"]
+    if len(args) == 2 and args[0] == "-map" and args[1].endswith(":a:0") and not args[1].startswith("0:"):
+        # Voice only, mapped straight through.
+        return ["-filter_complex", f"[{args[1][:-4]}:a]anull[premix];[premix]{music}{mix}", "-map", "[aout]"]
+    # Dub and original audio both off (or no separate audio inputs): the music alone.
+    return ["-filter_complex", f"{music}alimiter=limit=0.95[aout]", "-map", "[aout]"]
 
 
 def _audio_mix_filter(

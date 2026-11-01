@@ -4,6 +4,8 @@ import { cancelJob, getJob, getRuntimeOptions, getRuntimeSettings, getTranslatio
 import type { Job, RuntimeOptions, RuntimeSettings, VoiceProfile } from "../types";
 import { useT } from "../i18n";
 import { openUrl } from "../lib/open-url";
+import { JobStatusBadge } from "../components/channels/jobs";
+import { ReviewProgressNotice } from "../components/review/ReviewBadge";
 
 const ROUTER_DASHBOARD = "http://127.0.0.1:20128/dashboard";
 
@@ -445,12 +447,6 @@ function SpinnerRing() {
   );
 }
 
-function pillClass(status: string): string {
-  if (status === "ready") return "pill ready";
-  if (status === "failed" || status === "cancelled") return "pill failed";
-  if (ACTIVE.has(status)) return "pill run";
-  return "pill idle";
-}
 
 export default function ProgressScreen({
   jobId,
@@ -722,8 +718,8 @@ export default function ProgressScreen({
         >
           {job.source_title || job.video_url}
         </h1>
-        <span className={pillClass(job.status)} style={{ flexShrink: 0, marginTop: 3 }}>
-          {job.status}
+        <span style={{ flexShrink: 0, marginTop: 3 }}>
+          <JobStatusBadge t={t} status={job.status} />
         </span>
       </div>
       <p className="sub" style={{ marginBottom: 20 }}>
@@ -852,6 +848,9 @@ export default function ProgressScreen({
             )}
           </div>
           <video src={out} controls style={{ width: "100%", borderRadius: 6 }} />
+          <div style={{ marginTop: 12 }}>
+            <ReviewProgressNotice jobId={job.id} onOpen={onOpenEditor} />
+          </div>
           <div className="actions" style={{ marginTop: 12 }}>
             <button className="btn primary" disabled={revealing} onClick={() => void reveal()}>
               {revealing
