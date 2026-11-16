@@ -37,7 +37,8 @@ from .detect import (
 GAP = 0.05  # Silence kept between two voices.
 SUB_GAP = 0.04  # Between two subtitles.
 LEAD = 0.3  # A voice may start this much before its subtitle…
-LAG = 0.4  # …or this much after it.
+# …or this much after it; its subtitle then moves along (see _follow_subtitles).
+LAG = 0.4
 COMFORT_MAX = 1.15  # Comfortable speed-up; users tolerate up to ACCEPT_MAX.
 ACCEPT_MAX = 1.25
 HARD_MAX = 2.0  # editor.MAX_TEMPO
@@ -242,6 +243,18 @@ def _follow_subtitles(cues: list[CueView], changed: dict[str, CueView]) -> dict[
         start, end = cue.start, cue.end
         if cue.voice_start < start:
             start = min(start, max(cue.voice_start, (previous.end + SUB_GAP) if previous else 0.0, start - MAX_SUB_LEAD))
+        elif cue.voice_start > start + 0.02:
+            # A voice pushed later (the previous one runs over) takes its subtitle along,
+            # so the line appears when it is heard instead of a beat before. The whole
+            # window moves, keeping its reading time, as far as the next subtitle allows.
+            delay = cue.voice_start - start
+            room = ((following.start - SUB_GAP) - end) if following is not None else delay
+            shift = max(0.0, min(delay, room))
+            start, end = start + shift, end + shift
+            # Back-to-back sentences leave no room to move the window: start later
+            # anyway, as long as the line keeps enough time to be read.
+            keep = max(1.0, 0.7 * (cue.end - cue.start))
+            start = max(start, min(cue.voice_start, end - keep))
         if cue.voice_end > end and following is not None and following.shared:
             pass  # The split-off part shows the rest of this voice.
         elif cue.voice_end > end:
