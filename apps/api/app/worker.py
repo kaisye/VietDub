@@ -17,6 +17,7 @@ from .services.audio_bed import prepare_background_audio
 from .services import editor
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
+from .services.sentence_units import sentence_units_enabled
 from .services.renderer import (
     _probe_dimensions,
     prepare_display_subtitle,
@@ -803,7 +804,10 @@ def _continue_after_translation(
         else job.speaker_diarization_enabled
     ) and voice_enabled
     playback_subtitle_path = translated_subtitle_path
-    if voice_enabled and subtitle_enabled and not speakers_enabled:
+    # Sentence mode: TTS voices whole sentences from the translated file, and the
+    # display pages are built after TTS from the voice timing (below).
+    sentence_mode = sentence_units_enabled() and translated_subtitle_path.name.endswith(".render.srt")
+    if voice_enabled and subtitle_enabled and not speakers_enabled and not sentence_mode:
         playback_subtitle_path = prepare_display_subtitle(
             raw_video_path,
             translated_subtitle_path,
@@ -885,6 +889,18 @@ def _continue_after_translation(
     else:
         job.logs = append_log(job.logs, "Skipped TTS because Voice is set to None.")
 
+    display_subtitle_path = playback_subtitle_path
+    if sentence_mode and subtitle_enabled:
+        display_subtitle_path = prepare_display_subtitle(
+            raw_video_path,
+            translated_subtitle_path,
+            configuration.subtitle.style_snapshot if configuration else None,
+            max_lines=configuration.subtitle.max_lines if configuration else 2,
+            voice_spans=_voice_spans(audio_path) if audio_path and not speakers_enabled else None,
+        )
+        if display_subtitle_path != translated_subtitle_path:
+            _log_artifact(job, display_subtitle_path)
+
     _set_step(db, job, MediaJobStatus.rendering, 82, "Preparing background sound")
     audio_bed = prepare_background_audio(
         raw_video_path,
@@ -896,6 +912,27 @@ def _continue_after_translation(
         _log_artifact(job, audio_bed.path)
     _persist_job_log(job)
     db.commit()
+
+    if configuration and not configuration.workflow.auto_render:
+        # "Edit before rendering": everything the editor needs (source video, voice
+        # chunks, subtitles, background audio) exists now, so stop here and let the
+        # user render from the editor instead of encoding a video they will redo.
+        job.status = MediaJobStatus.ready
+        job.progress = 100
+        job.current_step = "Ready for editing"
+        job.output_url = None
+        job.error_message = None
+        job.completed_at = datetime.utcnow()
+        job.logs = append_log(
+            job.logs,
+            "Skipped rendering (render after editing). Open the editor to review and render the video.",
+        )
+        job.updated_at = datetime.utcnow()
+        _persist_job_log(job)
+        db.commit()
+        clear_progress(job.id)
+        _start_auto_review(db, job, configuration)
+        return
 
     render_quality = (
         configuration.output.render_quality if configuration else job.render_quality
@@ -910,7 +947,7 @@ def _continue_after_translation(
     output_path = render_video(
         raw_video_path,
         audio_path,
-        playback_subtitle_path if subtitle_enabled else None,
+        display_subtitle_path if subtitle_enabled else None,
         audio_bed.path,
         render_quality,
         subtitle_style=(
@@ -943,6 +980,22 @@ def _continue_after_translation(
     db.commit()
     clear_progress(job.id)
     _start_auto_review(db, job, configuration)
+
+
+def _voice_spans(audio_path: Path) -> list[tuple[float, float] | None] | None:
+    """Where each voiced sentence actually plays, from the TTS chunk manifest."""
+    manifest = audio_path.with_suffix(".chunks.json")
+    try:
+        chunks = json.loads(manifest.read_text(encoding="utf-8")).get("chunks", [])
+    except (OSError, ValueError):
+        return None
+    spans: list[tuple[float, float] | None] = []
+    for chunk in chunks:
+        try:
+            spans.append((float(chunk["start"]), float(chunk["end"])))
+        except (KeyError, TypeError, ValueError):
+            spans.append(None)
+    return spans or None
 
 
 def _start_auto_review(db: Session, job: MediaJob, configuration: ProductionConfiguration | None) -> None:

@@ -2233,6 +2233,12 @@ function OutputStep({ draft, patch }: DraftStepProps) {
         {/* Auto review (Rà soát tự động) after the dub finishes. */}
         <div className="mt-5 grid gap-3 border-t border-[var(--border-subtle)] pt-5">
           <Switch
+            checked={draft.workflow.auto_render !== false}
+            onChange={(auto_render) => patch("workflow", { ...draft.workflow, auto_render })}
+            label={t.out_auto_render_label}
+            description={t.out_auto_render_desc}
+          />
+          <Switch
             checked={(draft.workflow.auto_review ?? "propose") !== "off"}
             onChange={(on) => patch("workflow", { ...draft.workflow, auto_review: on ? "propose" : "off" })}
             label={t.ar_wizard_label}

@@ -1515,6 +1515,10 @@ const vi = {
   ar_progress_running: "Đang rà soát giọng đọc và phụ đề…",
   ar_progress_open: "Mở rà soát",
   ar_wizard_label: "Tự rà soát sau khi lồng tiếng",
+  out_auto_render_label: "Render video ngay khi lồng tiếng xong",
+  out_auto_render_desc: "Tắt để dừng trước bước render: mở Editor chỉnh phụ đề, giọng, chữ trên màn hình rồi bấm Render một lần.",
+  progress_unrendered_title: "Sẵn sàng để chỉnh sửa",
+  progress_unrendered_desc: "Đã dịch và lồng tiếng xong, video chưa được render. Mở Editor để chỉnh rồi bấm Render.",
   ar_wizard_desc: "Khi lồng tiếng xong, kiểm tra câu đọc quá nhanh/chậm, giọng chồng nhau và phụ đề cắt chưa khéo.",
   // ── end Auto review ──
   // ── Editor audio tracks & music (screens/editor/music/*) ──
@@ -3116,6 +3120,10 @@ const en: T = {
   ar_progress_running: "Reviewing voice pacing and subtitles…",
   ar_progress_open: "Open review",
   ar_wizard_label: "Auto review after dubbing",
+  out_auto_render_label: "Render the video as soon as dubbing finishes",
+  out_auto_render_desc: "Turn off to stop before rendering: open the Editor, adjust subtitles, voice and on-screen text, then render once.",
+  progress_unrendered_title: "Ready for editing",
+  progress_unrendered_desc: "Translation and dubbing are done; the video has not been rendered yet. Open the Editor to adjust it, then render.",
   ar_wizard_desc: "When dubbing finishes, check for rushed/dragging lines, overlapping voices and badly cut subtitles.",
   // ── end Auto review ──
   // ── Editor audio tracks & music (screens/editor/music/*) ──

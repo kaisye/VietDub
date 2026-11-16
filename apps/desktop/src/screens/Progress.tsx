@@ -844,6 +844,22 @@ export default function ProgressScreen({
       {/* Spacer when done */}
       {!ACTIVE.has(job.status) && <div style={{ marginBottom: 20 }} />}
 
+      {/* Finished with "render after editing": nothing to play yet, go to the editor. */}
+      {job.status === "ready" && !out ? (
+        <div className="card">
+          <h2 style={{ margin: "0 0 6px" }}>{t.progress_unrendered_title}</h2>
+          <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+            {t.progress_unrendered_desc}
+          </p>
+          <ReviewProgressNotice jobId={job.id} onOpen={onOpenEditor} />
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button className="btn primary" onClick={onOpenEditor}>
+              {isVI ? "Mở Editor" : "Open editor"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Result */}
       {job.status === "ready" && out ? (
         <div className="card">
