@@ -22,10 +22,11 @@ jobs:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
-          # Standard macos-14 runner is Apple Silicon (M1, aarch64): free on
-          # public repos / uses included minutes. The xlarge variant is a paid
-          # larger runner and needs a spending limit, so we avoid it.
-          - platform: macos-14
+          # Standard macos-15 runner is Apple Silicon (aarch64): free on public
+          # repos / uses included minutes. GitHub retired the macos-14 image
+          # ("configuration 'macos-14-arm64-us-default' is not supported"). The
+          # xlarge variant is a paid larger runner, so we avoid it.
+          - platform: macos-15
             target: aarch64-apple-darwin
             bundles: app,dmg
     runs-on: ${{ matrix.platform }}
