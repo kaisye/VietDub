@@ -590,7 +590,27 @@ function CredentialForm({
   const [scopes, setScopes] = useState(platform.scopes_override);
   const [showAdvanced, setShowAdvanced] = useState(!!platform.scopes_override);
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [error, setError] = useState("");
+  const storedInApp = platform.client_id_source === "settings" || platform.client_secret_source === "settings";
+
+  // Forget the app credentials saved in VietDub (env-provided values stay).
+  const reset = async () => {
+    setResetting(true);
+    setError("");
+    try {
+      const res = await updatePlatformCredentials(platform.platform, { client_id: "", clear_secret: true, scopes: "" });
+      setClientId(res.client_id);
+      setSecret("");
+      setScopes("");
+      setShowAdvanced(false);
+      onSaved(res);
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -652,6 +672,18 @@ function CredentialForm({
         <Button variant="ghost" size="sm" leadingIcon={<BookOpen size={14} />} onClick={() => void openUrl(platform.docs_url)}>
           {t.chn_open_docs}
         </Button>
+        {storedInApp ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            leadingIcon={<Trash2 size={14} />}
+            loading={resetting}
+            className="hover:!text-[var(--danger)]"
+            onClick={() => void reset()}
+          >
+            {t.chn_reset_credentials}
+          </Button>
+        ) : null}
         <div className="ml-auto flex gap-2">
           {onCancel ? (
             <Button size="sm" onClick={onCancel}>
@@ -810,11 +842,14 @@ function ConnectModal({
           {PLATFORMS.map((p) => {
             const ps = settings?.platforms.find((x) => x.platform === p);
             return (
+              <div key={p} className="relative">
               <button
-                key={p}
                 type="button"
                 onClick={() => choose(p)}
-                className="flex items-center gap-4 rounded-[var(--radius-panel-sm)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3.5 text-left transition hover:border-[color-mix(in_srgb,var(--primary)_40%,var(--border))] hover:shadow-[var(--shadow-float)]"
+                className={clsx(
+                  "flex w-full items-center gap-4 rounded-[var(--radius-panel-sm)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3.5 text-left transition hover:border-[color-mix(in_srgb,var(--primary)_40%,var(--border))] hover:shadow-[var(--shadow-float)]",
+                  ps?.configured && "pr-14",
+                )}
               >
                 <PlatformIcon platform={p} size={30} />
                 <div className="min-w-0 flex-1">
@@ -833,6 +868,21 @@ function ConnectModal({
                   </Badge>
                 )}
               </button>
+              {ps?.configured ? (
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  label={t.chn_edit_credentials}
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  onClick={() => {
+                    setPlatform(p);
+                    setStep("setup");
+                  }}
+                >
+                  <Settings2 size={15} />
+                </IconButton>
+              ) : null}
+              </div>
             );
           })}
           <div className="mt-1 flex items-center justify-between rounded-[var(--radius-panel-sm)] bg-[var(--surface-muted)] px-4 py-3 text-[13px] text-[var(--text-secondary)]">
