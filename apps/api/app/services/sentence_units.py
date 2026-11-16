@@ -56,8 +56,25 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
     return min(maximum, max(minimum, value))
 
 
+# Titles that are always followed by a name, so their period never ends a
+# sentence ("…as Mr." / "Leatherjacket himself…"). Words that can end one
+# ("etc.", "Inc.", "Jr.") are deliberately left out.
+_TITLE_ABBREVIATIONS = frozenset(
+    "mr mrs ms mx dr prof sen rep gov gen lt col capt sgt st mt fr rev hon pres vs".split()
+)
+_LAST_WORD_RE = re.compile(r"([^\W\d_]+)\.$")
+_INITIAL_RE = re.compile(r"(?:^|\s)[A-Z]\.$")
+
+
 def ends_sentence(text: str) -> bool:
-    return bool(_SENTENCE_END_RE.search(text.strip()))
+    stripped = text.strip()
+    if not _SENTENCE_END_RE.search(stripped):
+        return False
+    word = _LAST_WORD_RE.search(stripped)
+    if word and word.group(1).casefold() in _TITLE_ABBREVIATIONS:
+        return False
+    # A lone capital initial ("Jensen H.") continues with the rest of the name.
+    return not _INITIAL_RE.search(stripped)
 
 
 def _join(texts: Sequence[str]) -> str:

@@ -72,6 +72,17 @@ def test_abbreviation_followed_by_lowercase_does_not_end_the_sentence() -> None:
     ]
 
 
+def test_title_abbreviation_does_not_end_the_sentence() -> None:
+    units = _group(
+        [
+            _cue(2.37, 6.27, "That's how much market value Nvidia has shed in just 4 trading sessions, as"),
+            _cue(6.51, 6.71, "Mr."),
+            _cue(6.81, 11.25, "Leatherjacket himself, Jensen Huang, exits the company amid a firestorm scandal."),
+        ]
+    )
+    assert [(u.start, u.end) for u in units] == [(2.37, 11.25)]
+
+
 def test_very_short_sentence_joins_the_next_one() -> None:
     units = _group([_cue(0.0, 0.4, "Yes."), _cue(0.5, 3.0, "That is right."), _cue(4.0, 6.0, "Next.")])
     assert [(u.start, u.end) for u in units] == [(0.0, 3.0), (4.0, 6.0)]
