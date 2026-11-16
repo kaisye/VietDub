@@ -794,6 +794,51 @@ def _normalized_source_language(source_language: str | None) -> str | None:
     return aliases.get(value, value.split("-", 1)[0])
 
 
+# Letters only Vietnamese uses. Plain acute/grave/circumflex vowels (á é í ó ú à
+# â ê ô ...) are shared with Spanish, French and Portuguese, so they must not count
+# as Vietnamese: a Spanish subtitle track was once detected as "vi" and therefore
+# never translated into Vietnamese.
+_VIETNAMESE_LETTERS = re.compile(r"[ăđơưĩũĂĐƠƯĨŨ\u1ea0-\u1ef9]")
+_LATIN_STOPWORDS: dict[str, frozenset[str]] = {
+    # Common Vietnamese words written without any Vietnamese-only letter.
+    "vi": frozenset("tôi là và có cho với các một anh em chị này nó bạn khi mà thì".split()),
+    "en": frozenset(
+        "the and of to is are was were that this with for you it in on not have what".split()
+    ),
+    "es": frozenset(
+        "el la los las de que y en un una es por con para del se no lo más pero como su al".split()
+    ),
+    "fr": frozenset(
+        "le la les de des et est un une que qui pas pour dans ce il elle nous vous sur au du".split()
+    ),
+    "pt": frozenset(
+        "o a os as de que e em um uma é não para com do da dos das se mais por mas".split()
+    ),
+    "de": frozenset(
+        "der die das und ist nicht ein eine zu mit den von sich auf ich es sie wir auch".split()
+    ),
+    "it": frozenset(
+        "il la le di che e un una è non per con del della sono si mi ma come anche".split()
+    ),
+}
+_LATIN_LANGUAGES = frozenset({"en", "vi", "latin", *_LATIN_STOPWORDS})
+
+
+def _detect_latin_language(text: str) -> str:
+    words = re.findall(r"[^\W\d_]+", text.casefold())
+    if not words:
+        return "en"
+    scores = {
+        language: sum(1 for word in words if word in stopwords)
+        for language, stopwords in _LATIN_STOPWORDS.items()
+    }
+    # Spanish-only punctuation and letters settle short ambiguous lines.
+    if re.search(r"[ñ¿¡]", text.casefold()):
+        scores["es"] += 2
+    best = max(scores, key=lambda language: (scores[language], language == "en"))
+    return best if scores[best] > scores["en"] else "en"
+
+
 def _detect_text_language(text: str) -> str:
     if not text.strip():
         return "unknown"
@@ -801,8 +846,8 @@ def _detect_text_language(text: str) -> str:
         "ja": len(re.findall(r"[\u3040-\u30ff]", text)),
         "ko": len(re.findall(r"[\uac00-\ud7af]", text)),
         "zh": len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text)),
-        "vi": len(re.findall(r"[ăâđêôơưĂÂĐÊÔƠƯàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]", text)),
-        "en": len(re.findall(r"[A-Za-z]", text)),
+        "vi": len(_VIETNAMESE_LETTERS.findall(text)),
+        "en": len(re.findall(r"[A-Za-zÀ-ÿ]", text)),
     }
     if counts["ja"]:
         counts["ja"] += counts["zh"]
@@ -813,6 +858,8 @@ def _detect_text_language(text: str) -> str:
     language, count = max(counts.items(), key=lambda item: item[1])
     if count <= 0:
         return "unknown"
+    if language == "en":
+        return _detect_latin_language(text)
     return language
 
 
@@ -826,7 +873,7 @@ def _language_fit_score(text: str, language: str) -> float:
         matched = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff]", compact))
     elif language == "ko":
         matched = len(re.findall(r"[\uac00-\ud7af\u3400-\u9fff]", compact))
-    elif language in {"en", "vi", "latin"}:
+    elif language in _LATIN_LANGUAGES:
         matched = len(re.findall(r"[A-Za-zÀ-ỹ]", compact))
     else:
         return 0.0
