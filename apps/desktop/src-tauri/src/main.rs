@@ -22,11 +22,46 @@ fn stop_backend_process(state: &BackendProcess) -> Result<(), String> {
         .take();
     if let Some(mut child) = child {
         if child.try_wait().map_err(|err| err.to_string())?.is_none() {
-            child.kill().map_err(|err| err.to_string())?;
+            // The packaged sidecar is a PyInstaller one-file bootloader that runs the
+            // real server as its own child. Killing only the bootloader orphans that
+            // server (it keeps the port and the database open), so signal the whole
+            // process group, give uvicorn a moment to shut down, then force it.
+            signal_backend_group(&child, "-TERM");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+            while child.try_wait().map_err(|err| err.to_string())?.is_none()
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            signal_backend_group(&child, "-KILL");
+            let _ = child.kill();
         }
         child.wait().map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn signal_backend_group(child: &Child, signal: &str) {
+    // spawn_backend puts the sidecar in its own process group (pgid == pid).
+    let _ = Command::new("/bin/kill")
+        .args([signal, "--", &format!("-{}", child.id())])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(windows)]
+fn signal_backend_group(child: &Child, _signal: &str) {
+    // /T ends the bootloader's server child too.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 #[tauri::command]
@@ -185,7 +220,16 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
         .env("AETHER_API_HOST", "127.0.0.1")
         .env("AETHER_API_PORT", &port)
         .env("AETHER_DATA_DIR", &data_dir)
-        .env("AETHER_RUNTIME_DIR", &runtime_dir);
+        .env("AETHER_RUNTIME_DIR", &runtime_dir)
+        // The backend exits by itself once this process is gone, so a crash or a
+        // force-quit of the shell never leaves an orphaned server behind.
+        .env("AETHER_PARENT_PID", std::process::id().to_string());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 
     if let Some(media_bin) = bundled_media_bin(app) {
         let mut paths = vec![media_bin];
@@ -459,7 +503,9 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building the Video Dubbing desktop app")
         .run(|app_handle, event| {
-            if let RunEvent::ExitRequested { .. } = event {
+            // Quitting from the macOS menu or via an Apple Event can reach Exit
+            // without ExitRequested; stopping twice is harmless (the child is taken).
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 let state: State<BackendProcess> = app_handle.state();
                 let _ = stop_backend_process(state.inner());
             }
