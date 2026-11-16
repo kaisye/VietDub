@@ -379,3 +379,21 @@ def test_insert_segment_adds_an_unvoiced_cue_in_order(job_storage, monkeypatch) 
     )
     voiced = editor.with_issues(workspace)["segments"][-1]
     assert voiced["audio_start"] == 5.2 and voiced["issues"] == []
+
+
+def test_editor_uses_sentences_when_chunks_match(job_storage) -> None:
+    job, config = job_storage
+    subtitles = storage.STORAGE_ROOT / "subtitles"
+    display = next(subtitles.glob(f"{job}*.render.display.srt"))
+    sentence_file = display.with_name(display.name.replace(".render.display.srt", ".render.srt"))
+    manifest = next((storage.STORAGE_ROOT / "audio").glob(f"{job}*.chunks.json"))
+    chunks = json.loads(manifest.read_text(encoding="utf-8"))["chunks"]
+    blocks = [
+        f"{index}\n00:00:{int(chunk['start']):02d},000 --> 00:00:{int(chunk['end']) + 1:02d},000\nCâu {index}."
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+    sentence_file.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+
+    workspace = editor.build_workspace(job, config)
+    assert [segment["text"] for segment in workspace["segments"]] == [f"Câu {i}." for i in range(1, len(chunks) + 1)]
+    assert all(segment["audio_url"] for segment in workspace["segments"])

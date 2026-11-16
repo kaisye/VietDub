@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .sentence_units import sentence_units_enabled
 from .ffmpeg_compat import complex_filter_file_args
 from .progress import report_progress
 from .runtime_settings import get_runtime_settings
@@ -309,7 +310,11 @@ def _generate_chunked_tts(
     workdir = root / "audio" / f"{artifact_stem}.chunks"
     workdir.mkdir(parents=True, exist_ok=True)
 
-    preserve_cue_boundaries = subtitle_path.name.endswith(".display.srt")
+    # Display cues and sentence units (".render.srt" in sentence mode) are already
+    # the units to voice: one clip each, never regrouped or split mid-sentence.
+    preserve_cue_boundaries = subtitle_path.name.endswith(".display.srt") or (
+        sentence_units_enabled() and subtitle_path.name.endswith(".render.srt")
+    )
     semantic_cues = (
         _ordered_cues(cues)
         if preserve_cue_boundaries

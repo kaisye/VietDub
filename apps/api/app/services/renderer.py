@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .sentence_units import page_cue
 from .audio_bed import background_volume, tts_volume
 from .auto_review.vi_text import break_penalty
 from .storage import ensure_storage
@@ -391,16 +392,40 @@ def prepare_display_subtitle(
     subtitle_path: Path,
     subtitle_style: dict[str, Any] | None = None,
     max_lines: int = 2,
+    voice_spans: list[tuple[float, float] | None] | None = None,
 ) -> Path:
-    """Create the display cues before TTS so voice and subtitles share them."""
+    """Write the display pages the viewer reads.
+
+    Legacy mode calls this before TTS, and voice and subtitles share the pages.
+    Sentence mode calls it after TTS with ``voice_spans`` (one per sentence cue,
+    from the chunk manifest), so page changes follow the dubbed voice.
+    """
     configured = normalize_subtitle_style(subtitle_style)
     chars_per_line = _subtitle_chars_per_line(configured, _probe_dimensions(video_path))
     display_cues: list[tuple[float, float, str]] = []
-    source_cues = _merge_orphan_display_cues(_parse_srt_for_ass(subtitle_path))
-    for cue_start, cue_end, cue_text in source_cues:
+    parsed = _parse_srt_for_ass(subtitle_path)
+    one_span_per_cue = voice_spans is not None and len(voice_spans) == len(parsed)
+    source_cues = parsed if one_span_per_cue else _merge_orphan_display_cues(parsed)
+    for index, (cue_start, cue_end, cue_text) in enumerate(source_cues):
+        span = voice_spans[index] if one_span_per_cue else None
         display_cues.extend(
-            _wrap_cue_for_ass(cue_text, cue_start, cue_end, chars_per_line, max_lines)
+            _wrap_cue_for_ass(
+                cue_text,
+                cue_start,
+                cue_end,
+                chars_per_line,
+                max_lines,
+                voice_start=span[0] if span else None,
+                voice_end=span[1] if span else None,
+            )
         )
+    # A voice that overruns its cue keeps its last page up longer; never let that
+    # page cover the next sentence's first page.
+    for index in range(len(display_cues) - 1):
+        start, end, text = display_cues[index]
+        next_start = display_cues[index + 1][0]
+        if end > next_start:
+            display_cues[index] = (start, max(start + 0.2, next_start), text)
 
     if not display_cues:
         return subtitle_path
@@ -765,28 +790,46 @@ def _wrap_cue_for_ass(
     end: float,
     chars_per_line: int,
     max_lines: int,
+    *,
+    voice_start: float | None = None,
+    voice_end: float | None = None,
+    hold_for_voice: bool = True,
 ) -> list[tuple[float, float, str]]:
-    """Word-wrap cue text and split into consecutive sub-cues of at most max_lines each."""
-    wrapped = _wrap_text_lines(text, chars_per_line, max_lines)
-    if not wrapped:
+    """Split a cue into display pages of at most max_lines wrapped lines.
+
+    Pages break at clause boundaries and are timed by text length, against the
+    dubbed voice when its span is known (see sentence_units.page_cue).
+    """
+    max_lines = max(1, max_lines)
+    pages = page_cue(
+        text,
+        start,
+        end,
+        chars_per_line,
+        max_lines,
+        voice_start=voice_start,
+        voice_end=voice_end,
+        hold_for_voice=hold_for_voice,
+    )
+    if not pages:
         return [(start, end, text)]
-
-    # Group into blocks of max_lines each.
-    groups: list[str] = []
-    for i in range(0, len(wrapped), max(1, max_lines)):
-        groups.append("\n".join(wrapped[i : i + max_lines]))
-
-    if len(groups) == 1:
-        return [(start, end, groups[0])]
-
-    # Distribute cue time proportionally across groups.
-    duration = max(0.05, end - start)
-    n = len(groups)
     result: list[tuple[float, float, str]] = []
-    for i, group in enumerate(groups):
-        g_start = round(start + duration * i / n, 3)
-        g_end = round(start + duration * (i + 1) / n, 3)
-        result.append((g_start, g_end, group))
+    for page_start, page_end, page_text in pages:
+        wrapped = _wrap_text_lines(page_text, chars_per_line, max_lines) or [page_text]
+        groups = ["\n".join(wrapped[i : i + max_lines]) for i in range(0, len(wrapped), max_lines)]
+        # A page sized to fit can still wrap one line over (long words); share its
+        # time by length rather than dropping text.
+        weights = [max(1, len(group)) for group in groups]
+        total = sum(weights)
+        cursor = page_start
+        for index, (group, weight) in enumerate(zip(groups, weights)):
+            group_end = (
+                page_end
+                if index == len(groups) - 1
+                else cursor + (page_end - page_start) * weight / total
+            )
+            result.append((round(cursor, 3), round(group_end, 3), group))
+            cursor = group_end
     return result
 
 

@@ -76,11 +76,19 @@ def build_workspace(job_id: str, configuration: dict[str, Any] | None, title: st
     if not raw_video:
         raise FileNotFoundError("Không tìm thấy video gốc của job này.")
     subtitles = root / "subtitles"
-    display = _newest(subtitles, f"{job_id}*.render.display.srt") or _newest(subtitles, f"{job_id}*.render.srt")
+    chunk_manifest = _newest(root / "audio", f"{job_id}*.chunks.json")
+    chunks = json.loads(chunk_manifest.read_text(encoding="utf-8")).get("chunks", []) if chunk_manifest else []
+    sentences = _newest(subtitles, f"{job_id}*.render.srt")
+    # Sentence-mode jobs voice one clip per translated sentence: edit those whole
+    # sentences (display pages are derived from each one). Older jobs voiced the
+    # display pages, so edit the pages.
+    if sentences and chunks and len(chunks) == len(tts._parse_srt_cues(sentences)):
+        display = sentences
+    else:
+        display = _newest(subtitles, f"{job_id}*.render.display.srt") or sentences
     if not display:
         raise FileNotFoundError("Không tìm thấy phụ đề đã dịch của job này.")
     source = _newest(subtitles, f"{job_id}*.render.source.srt")
-    chunk_manifest = _newest(root / "audio", f"{job_id}*.chunks.json")
     translated_segments = _newest(subtitles, f"{job_id}*.translated-segments.json")
     source_language = (
         json.loads(translated_segments.read_text(encoding="utf-8")).get("source_language")
@@ -90,7 +98,6 @@ def build_workspace(job_id: str, configuration: dict[str, Any] | None, title: st
 
     display_cues = tts._parse_srt_cues(display)
     source_cues = tts._parse_srt_cues(source) if source else []
-    chunks = json.loads(chunk_manifest.read_text(encoding="utf-8")).get("chunks", []) if chunk_manifest else []
     # Local timeline TTS voices each display cue separately, so chunks map 1:1 by
     # order; otherwise match each cue to the chunk that starts closest to it.
     one_to_one = len(chunks) == len(display_cues)
@@ -233,9 +240,7 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
             issues.append("overrun")
         display = [
             {"start": start, "end": end, "lines": lines.split("\n")}
-            for start, end, lines in _wrap_cue_for_ass(
-                segment["text"], segment["start"], segment["end"], layout["chars_per_line"], layout["max_lines"]
-            )
+            for start, end, lines in display_pages(segment, layout)
         ] if text else []
         flagged.append({**segment, "issues": issues, "display": display})
     return {
@@ -964,12 +969,42 @@ def delete_draft(job_id: str, draft_id: str) -> None:
     (drafts_dir(job_id) / f"{Path(draft_id).name}.json").unlink(missing_ok=True)
 
 
+def display_pages(segment: dict[str, Any], layout: dict[str, Any]) -> list[tuple[float, float, str]]:
+    """The pages a segment shows, timed by its voice while the voice matches the text."""
+    voiced = (
+        segment.get("audio_url")
+        and not segment.get("muted")
+        and segment.get("audio_text", "") == segment["text"]
+        and float(segment.get("audio_duration") or 0) > 0
+    )
+    voice_start = float(segment.get("audio_start", segment["start"])) if voiced else None
+    return _wrap_cue_for_ass(
+        segment["text"],
+        segment["start"],
+        segment["end"],
+        layout["chars_per_line"],
+        layout["max_lines"],
+        voice_start=voice_start,
+        voice_end=voice_start + float(segment["audio_duration"]) if voice_start is not None else None,
+        hold_for_voice=False,
+    )
+
+
 def write_srt(workspace: dict[str, Any], destination: Path) -> Path:
+    """Write the display pages, so the burned subtitles match the preview exactly."""
+    layout = subtitle_layout(workspace)
+    pages: list[tuple[float, float, str]] = []
+    for segment in workspace["segments"]:
+        if segment["text"].strip():
+            pages.extend(display_pages(segment, layout))
+    pages.sort(key=lambda page: page[0])
+    for index in range(len(pages) - 1):
+        start, end, text = pages[index]
+        if end > pages[index + 1][0]:
+            pages[index] = (start, max(start + 0.2, pages[index + 1][0]), text)
     blocks = [
-        f"{number}\n{_srt_time(segment['start'])} --> {_srt_time(segment['end'])}\n{segment['text']}"
-        for number, segment in enumerate(
-            (segment for segment in workspace["segments"] if segment["text"].strip()), start=1
-        )
+        f"{number}\n{_srt_time(start)} --> {_srt_time(end)}\n{text.replace(chr(10), ' ')}"
+        for number, (start, end, text) in enumerate(pages, start=1)
     ]
     destination.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
     return destination

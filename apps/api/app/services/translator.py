@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from .sentence_units import group_sentences, sentence_units_enabled
 from .caption_text import remove_non_speech_tags
 from .progress import report_progress
 from .renderer import source_language_subtitle_path
@@ -79,6 +80,9 @@ def _translate_subtitle_source_first(
         force_semantic=_is_hardsub_ocr_source(subtitle_path),
     )
     source_text = semantic_path.read_text(encoding="utf-8", errors="ignore")
+    sentence_mode = sentence_units_enabled()
+    if sentence_mode:
+        source_text = _group_source_sentences(source_text)
     effective_source_language = (
         source_artifacts.dominant_language
         if source_artifacts and source_artifacts.dominant_language not in {"", "unknown", "mixed"}
@@ -112,7 +116,13 @@ def _translate_subtitle_source_first(
             dedupe_near_duplicates=_is_hardsub_ocr_source(subtitle_path),
         )
 
-    destination.write_text(_format_render_subtitles(translated), encoding="utf-8")
+    # Sentence mode keeps one cue per sentence: that is the unit TTS voices, and
+    # display pages are derived later from the dubbed voice. The legacy format
+    # splits sentences here with interpolated times.
+    destination.write_text(
+        _format_sentence_subtitles(translated) if sentence_mode else _format_render_subtitles(translated),
+        encoding="utf-8",
+    )
     translated_segments_path(destination).write_text(
         json.dumps(translated_segments, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1733,6 +1743,35 @@ def _word_count(text: str) -> int:
         latin_tokens = re.findall(r"[A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)*", text_without_cjk)
         return len(cjk_chars) + len(latin_tokens)
     return len(re.findall(r"\S+", text))
+
+
+def _group_source_sentences(source_srt: str) -> str:
+    """Join source cues into whole sentences, keeping the cues' own boundaries."""
+    cues = _parse_indexed_srt_cues(source_srt)
+    # Sound-only captions ("[Music]") stay on their own: merged into the next
+    # sentence they would pull its start back to when the music began.
+    spoken = [cue for cue in cues if remove_non_speech_tags(cue.text)]
+    sound_only = [(cue.start, cue.end, cue.text) for cue in cues if not remove_non_speech_tags(cue.text)]
+    units = group_sentences(spoken, start=lambda c: c.start, end=lambda c: c.end, text=lambda c: c.text)
+    if not units:
+        return source_srt
+    timed = sorted([(unit.start, unit.end, unit.text) for unit in units] + sound_only)
+    blocks = [
+        f"{index}\n{_format_srt_time(start)} --> {_format_srt_time(end)}\n{text}"
+        for index, (start, end, text) in enumerate(timed, start=1)
+    ]
+    return "\n\n".join(blocks).strip() + "\n"
+
+
+def _format_sentence_subtitles(srt_text: str) -> str:
+    cues = _parse_srt_cues(srt_text)
+    if not cues:
+        return srt_text
+    blocks = [
+        f"{index}\n{_format_srt_time(start)} --> {_format_srt_time(end)}\n{text}"
+        for index, (start, end, text) in enumerate(cues, start=1)
+    ]
+    return "\n\n".join(blocks).strip() + "\n"
 
 
 def _format_render_subtitles(srt_text: str) -> str:
