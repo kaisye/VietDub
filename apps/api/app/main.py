@@ -22,7 +22,8 @@ import httpx
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session, selectinload
 
-from .database import Base, SessionLocal, engine, get_db
+from . import instance_lock
+from .database import DATABASE_URL, Base, SessionLocal, engine, get_db
 from .job_runner import create_job, start_mock_job
 from .models import (
     AuditLog,
@@ -215,6 +216,10 @@ def serialize_video(video: Video) -> VideoOut:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before anything touches the database: a second backend on the same data
+    # dir would fail this one's running jobs below and steal its queued ones.
+    if os.getenv("AETHER_SKIP_INSTANCE_LOCK") != "1":
+        instance_lock.acquire(instance_lock.lock_path_for(DATABASE_URL))
     _backup_sqlite_before_platform_migration()
     Base.metadata.create_all(bind=engine)
     ensure_schema_compatibility()
