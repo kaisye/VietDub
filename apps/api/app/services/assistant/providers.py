@@ -640,10 +640,14 @@ class OpenAICompatibleProvider:
         }
 
 
-def build_provider(settings: dict[str, Any], provider: str | None = None):
+def build_provider(settings: dict[str, Any], provider: str | None = None, *, model: str | None = None):
+    """``model`` overrides the saved model for this one call (the composer's model picker)."""
     name = provider or settings.get("active_provider") or ANTHROPIC
+    model = (model or "").strip()
     if name == ANTHROPIC:
-        return AnthropicProvider(settings[ANTHROPIC], max_tokens=int(settings.get("max_tokens") or 16000))
+        config = {**settings[ANTHROPIC], "model": model} if model else settings[ANTHROPIC]
+        return AnthropicProvider(config, max_tokens=int(settings.get("max_tokens") or 16000))
     if name == OPENAI_COMPATIBLE:
-        return OpenAICompatibleProvider(settings[OPENAI_COMPATIBLE])
+        config = {**settings[OPENAI_COMPATIBLE], "model": model} if model else settings[OPENAI_COMPATIBLE]
+        return OpenAICompatibleProvider(config)
     raise ProviderError("not_configured", f"Nhà cung cấp không hợp lệ: {name}")

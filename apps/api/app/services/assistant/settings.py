@@ -27,6 +27,8 @@ DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 # Cheap, tool-capable default for the OpenAI-compatible path (via OpenRouter).
 DEFAULT_OPENROUTER_MODEL = "qwen/qwen3.7-flash"
+# Writing content (titles, captions, posts) reads better with DeepSeek; OpenRouter only.
+DEFAULT_CONTENT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 
 # OpenAI-compatible presets the UI can offer; ``base_url`` is editable anyway.
 OPENAI_PRESETS: dict[str, dict[str, Any]] = {
@@ -55,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "base_url": OPENAI_PRESETS["openrouter"]["base_url"],
         "api_key": "",
         "model": DEFAULT_OPENROUTER_MODEL,
+        "content_model": DEFAULT_CONTENT_MODEL,
         "tools_mode": "auto",
     },
 }
@@ -240,6 +243,20 @@ def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
     settings = apply_patch(load_settings(), patch)
     save_settings(settings)
     return settings
+
+
+def content_model_for(settings: dict[str, Any], provider: str) -> str:
+    """Model for writing content, or "" to use the provider's main model.
+
+    Only OpenRouter has one: other OpenAI-compatible servers (Ollama, LM Studio...)
+    rarely serve the same model ids.
+    """
+    if provider != OPENAI_COMPATIBLE:
+        return ""
+    section = settings[OPENAI_COMPATIBLE]
+    if section.get("preset") != "openrouter":
+        return ""
+    return str(section.get("content_model") or "").strip()
 
 
 def provider_configured(settings: dict[str, Any], provider: str) -> tuple[bool, str]:

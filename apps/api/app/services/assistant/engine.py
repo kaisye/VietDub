@@ -20,7 +20,7 @@ from .providers import (
     looks_like_tools_unsupported,
     strip_tool_turns,
 )
-from .settings import ANTHROPIC, OPENAI_COMPATIBLE, PROVIDERS, load_settings, provider_configured
+from .settings import ANTHROPIC, OPENAI_COMPATIBLE, PROVIDERS, content_model_for, load_settings, provider_configured
 
 MAX_TOOL_ROUNDS = 8
 # (base_url, model) of OpenAI-compatible models that rejected the tools field.
@@ -186,7 +186,8 @@ async def run_chat(session_factory: SessionFactory, request: dict[str, Any]) -> 
     except ProviderError as error:
         yield "error", error.as_dict()
         return
-    provider = build_provider(settings, provider_name)
+    model = request.get("model") or (content_model_for(settings, provider_name) if mode == "write" else "")
+    provider = build_provider(settings, provider_name, model=model)
 
     db = session_factory()
     assistant_text: list[str] = []
@@ -460,41 +461,29 @@ def normalize_job_content(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def generate_job_content(
-    session_factory: SessionFactory,
-    job_id: str,
-    *,
-    options: dict[str, Any] | None = None,
-    extra_instructions: str = "",
-    provider_name: str | None = None,
-    max_transcript_chars: int = 20000,
-) -> dict[str, Any]:
-    """Raises ``LookupError`` for a missing job and ``ProviderError`` otherwise."""
-    settings = load_settings()
-    name = resolve_provider_name(settings, provider_name)
-    provider = build_provider(settings, name)
+def _job_and_transcript(session_factory: SessionFactory, job_id: str, max_chars: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The job brief and its translated transcript (source when not translated). Raises ``LookupError``."""
     db = session_factory()
     try:
         job = job_brief(db, job_id)
         if not job:
             raise LookupError(job_id)
-        transcript = tools.read_transcript(job_id, "translated", max_transcript_chars)["translated"]
+        transcript = tools.read_transcript(job_id, "translated", max_chars)["translated"]
         if not transcript.get("available"):
-            transcript = tools.read_transcript(job_id, "source", max_transcript_chars)["source"]
+            transcript = tools.read_transcript(job_id, "source", max_chars)["source"]
     finally:
         db.close()
-    opts = prompts.normalize_options(options)
-    user = prompts.job_content_user_prompt(
-        job, transcript.get("text") or "", bool(transcript.get("truncated")), opts, (extra_instructions or "").strip()[:2000]
-    )
+    return job, transcript
+
+
+async def _json_answer(provider, system: str, user: str, schema: dict[str, Any], accept: Callable[[dict[str, Any]], Any]):
+    """Ask for one JSON object; retry once when the reply is not usable. Returns ``(accepted, model)``."""
     history: list[dict[str, Any]] = [{"role": "user", "content": user}]
     raw = ""
     model_used = provider.model
-    for attempt in range(2):
+    for _attempt in range(2):
         result: TurnResult | None = None
-        async for event in provider.stream_turn(
-            prompts.JOB_CONTENT_SYSTEM, history, None, effort="low", json_schema=prompts.JOB_CONTENT_SCHEMA
-        ):
+        async for event in provider.stream_turn(system, history, None, effort="low", json_schema=schema):
             if isinstance(event, TurnResult):
                 result = event
         assert result is not None
@@ -503,19 +492,103 @@ async def generate_job_content(
         raw = result.text
         model_used = result.model or model_used
         parsed = parse_json_object(raw)
-        if parsed is not None:
-            content = normalize_job_content(parsed)
-            if content["title"] or content["description"]:
-                return {
-                    "job_id": job_id,
-                    "provider": name,
-                    "model": model_used,
-                    "transcript_used": bool(transcript.get("available")),
-                    "transcript_truncated": bool(transcript.get("truncated")),
-                    "content": content,
-                }
+        accepted = accept(parsed) if parsed is not None else None
+        if accepted:
+            return accepted, model_used
         history = history + [
             {"role": "assistant", "content": raw or "(trống)"},
             {"role": "user", "content": "Phản hồi trước không phải JSON hợp lệ. Chỉ trả về đúng một đối tượng JSON theo yêu cầu, không thêm chữ nào khác."},
         ]
     raise ProviderError("invalid_output", "Mô hình không trả về JSON hợp lệ.", detail={"raw": raw[:2000]})
+
+
+def _content_provider(provider_name: str | None, model: str | None):
+    settings = load_settings()
+    name = resolve_provider_name(settings, provider_name)
+    return name, build_provider(settings, name, model=model or content_model_for(settings, name))
+
+
+async def generate_job_content(
+    session_factory: SessionFactory,
+    job_id: str,
+    *,
+    options: dict[str, Any] | None = None,
+    extra_instructions: str = "",
+    provider_name: str | None = None,
+    model: str | None = None,
+    max_transcript_chars: int = 20000,
+) -> dict[str, Any]:
+    """Raises ``LookupError`` for a missing job and ``ProviderError`` otherwise."""
+    name, provider = _content_provider(provider_name, model)
+    job, transcript = _job_and_transcript(session_factory, job_id, max_transcript_chars)
+    opts = prompts.normalize_options(options)
+    user = prompts.job_content_user_prompt(
+        job, transcript.get("text") or "", bool(transcript.get("truncated")), opts, (extra_instructions or "").strip()[:2000]
+    )
+
+    def accept(parsed: dict[str, Any]) -> dict[str, Any] | None:
+        content = normalize_job_content(parsed)
+        return content if content["title"] or content["description"] else None
+
+    content, model_used = await _json_answer(provider, prompts.JOB_CONTENT_SYSTEM, user, prompts.JOB_CONTENT_SCHEMA, accept)
+    return {
+        "job_id": job_id,
+        "provider": name,
+        "model": model_used,
+        "transcript_used": bool(transcript.get("available")),
+        "transcript_truncated": bool(transcript.get("truncated")),
+        "content": content,
+    }
+
+
+def normalize_post_drafts(data: dict[str, Any], count: int) -> list[dict[str, Any]]:
+    drafts = []
+    for item in data.get("drafts") or []:
+        if not isinstance(item, dict):
+            continue
+        caption = str(item.get("caption") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not caption and not title:
+            continue
+        hashtags = normalize_job_content({"hashtags": item.get("hashtags")})["hashtags"]
+        drafts.append({"title": title, "caption": caption, "hashtags": hashtags})
+    return drafts[:count]
+
+
+async def generate_post_drafts(
+    session_factory: SessionFactory,
+    job_id: str,
+    *,
+    platform: str | None = None,
+    tone: str | None = None,
+    count: int = 2,
+    extra_instructions: str = "",
+    provider_name: str | None = None,
+    model: str | None = None,
+    max_transcript_chars: int = 20000,
+) -> dict[str, Any]:
+    """A few ready-to-post versions (title, caption, hashtags) of a dubbed video for one platform.
+
+    Raises ``LookupError`` for a missing job and ``ProviderError`` otherwise.
+    """
+    count = max(1, min(3, count))
+    name, provider = _content_provider(provider_name, model)
+    job, transcript = _job_and_transcript(session_factory, job_id, max_transcript_chars)
+    user = prompts.post_drafts_user_prompt(
+        job,
+        transcript.get("text") or "",
+        bool(transcript.get("truncated")),
+        prompts.normalize_options({"platform": platform, "tone": tone}),
+        count,
+        (extra_instructions or "").strip()[:2000],
+    )
+    drafts, model_used = await _json_answer(
+        provider, prompts.POST_DRAFTS_SYSTEM, user, prompts.POST_DRAFTS_SCHEMA, lambda parsed: normalize_post_drafts(parsed, count)
+    )
+    return {
+        "job_id": job_id,
+        "provider": name,
+        "model": model_used,
+        "transcript_used": bool(transcript.get("available")),
+        "drafts": drafts,
+    }

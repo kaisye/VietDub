@@ -56,6 +56,7 @@ class OpenAISettingsIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
+    content_model: str | None = Field(default=None, max_length=200)
     tools_mode: Literal["auto", "on", "off"] | None = None
 
 
@@ -85,6 +86,7 @@ class ChatRequest(BaseModel):
     options: ChatOptions | None = None
     job_id: str | None = None
     provider: ProviderName | None = None
+    model: str | None = Field(default=None, max_length=200, description="Use this model instead of the provider's saved one.")
 
 
 class ConversationCreate(BaseModel):
@@ -101,12 +103,22 @@ class ConversationPatch(BaseModel):
     options: ChatOptions | None = None
 
 
+class PostDraftsRequest(BaseModel):
+    platform: str | None = None
+    tone: str | None = None
+    count: int = Field(default=2, ge=1, le=3)
+    extra_instructions: str = Field(default="", max_length=2000)
+    provider: ProviderName | None = None
+    model: str | None = Field(default=None, max_length=200)
+
+
 class JobContentRequest(BaseModel):
     platform: str | None = None
     tone: str | None = None
     language: str | None = None
     extra_instructions: str = Field(default="", max_length=2000)
     provider: ProviderName | None = None
+    model: str | None = Field(default=None, max_length=200)
 
 
 # ------------------------------------------------------------------ helpers
@@ -336,6 +348,31 @@ async def generate_job_content(
             options=payload.model_dump(include={"platform", "tone", "language"}, exclude_none=True),
             extra_instructions=payload.extra_instructions,
             provider_name=payload.provider,
+            model=payload.model,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Không tìm thấy video."}) from exc
+    except ProviderError as error:
+        raise _provider_http_error(error) from error
+
+
+@router.post("/jobs/{job_id}/post-drafts")
+async def generate_post_drafts(
+    job_id: str,
+    payload: PostDraftsRequest,
+    session_factory=Depends(get_session_factory),
+) -> dict[str, Any]:
+    """Ready-to-post versions of a dubbed video for one platform (calendar post form)."""
+    try:
+        return await engine.generate_post_drafts(
+            session_factory,
+            job_id,
+            platform=payload.platform,
+            tone=payload.tone,
+            count=payload.count,
+            extra_instructions=payload.extra_instructions,
+            provider_name=payload.provider,
+            model=payload.model,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Không tìm thấy video."}) from exc

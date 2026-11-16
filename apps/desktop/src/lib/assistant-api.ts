@@ -45,6 +45,8 @@ export type OpenAICompatibleSettings = {
   preset: string;
   base_url: string;
   model: string;
+  /** OpenRouter only: model for writing content (write mode, post drafts); "" = use `model`. */
+  content_model?: string;
   tools_mode: ToolsMode;
   api_key_set: boolean;
   api_key_masked: string;
@@ -64,7 +66,7 @@ export type AssistantSettingsPatch = {
   active_provider?: ProviderId;
   max_tokens?: number;
   anthropic?: Partial<Pick<AnthropicSettings, "model" | "base_url" | "effort" | "refusal_fallback">> & { api_key?: string | null };
-  openai_compatible?: Partial<Pick<OpenAICompatibleSettings, "preset" | "base_url" | "model" | "tools_mode">> & {
+  openai_compatible?: Partial<Pick<OpenAICompatibleSettings, "preset" | "base_url" | "model" | "content_model" | "tools_mode">> & {
     api_key?: string | null;
   };
 };
@@ -150,6 +152,8 @@ export type ChatRequest = {
   options?: ChatOptions;
   job_id?: string | null;
   provider?: ProviderId | null;
+  /** Use this model instead of the provider's saved one. */
+  model?: string | null;
 };
 
 export type JobContent = {
@@ -178,6 +182,7 @@ export type JobContentRequest = {
   language?: string;
   extra_instructions?: string;
   provider?: ProviderId | null;
+  model?: string | null;
 };
 
 // --- Errors -------------------------------------------------------------------
@@ -278,6 +283,28 @@ export const deleteConversation = (id: string) =>
 
 export const generateJobContent = (jobId: string, body: JobContentRequest = {}, signal?: AbortSignal) =>
   request<JobContentResponse>(`/jobs/${encodeURIComponent(jobId)}/generate-content`, { ...json("POST", body), signal });
+
+export type PostDraft = { title: string; caption: string; hashtags: string[] };
+
+export type PostDraftsRequest = {
+  platform?: string | null;
+  tone?: string;
+  count?: number;
+  extra_instructions?: string;
+  model?: string | null;
+};
+
+export type PostDraftsResponse = {
+  job_id: string;
+  provider: string;
+  model: string;
+  transcript_used: boolean;
+  drafts: PostDraft[];
+};
+
+/** Ready-to-post versions (title, caption, hashtags) of a dubbed video for one platform. */
+export const generatePostDrafts = (jobId: string, body: PostDraftsRequest = {}, signal?: AbortSignal) =>
+  request<PostDraftsResponse>(`/jobs/${encodeURIComponent(jobId)}/post-drafts`, { ...json("POST", body), signal });
 
 // --- Streaming chat (SSE over fetch) ---------------------------------------------
 

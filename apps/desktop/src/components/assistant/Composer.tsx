@@ -69,6 +69,8 @@ export const Composer = forwardRef<
     onSend: (text: string) => void;
     onStop: () => void;
     banner?: ReactNode;
+    /** The model picker, shown next to the attach button. */
+    modelSlot?: ReactNode;
   }
 >(function Composer(
   {
@@ -91,6 +93,7 @@ export const Composer = forwardRef<
     onSend,
     onStop,
     banner,
+    modelSlot,
   },
   ref,
 ) {
@@ -273,6 +276,8 @@ export const Composer = forwardRef<
               }}
             />
           </div>
+
+          {modelSlot}
 
           <div className="ml-auto">
             {streaming ? (

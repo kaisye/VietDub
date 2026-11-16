@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useT } from "../../i18n";
 import { generateJobContent, toAssistantError } from "../../lib/assistant-api";
+import { contentModelFor } from "./ModelPicker";
 import type { JobContentResponse, ProviderId } from "../../lib/assistant-api";
 import { Badge, Button, InlineNotice, Select, Skeleton, SkeletonText, TextField } from "../ui";
 import { CopyButton } from "./CopyButton";
@@ -98,6 +99,7 @@ export function JobContentGenerator({
           language: language || undefined,
           extra_instructions: extra.trim() || undefined,
           provider,
+          model: contentModelFor(provider) || null,
         },
         controller.signal,
       );

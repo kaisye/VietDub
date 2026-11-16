@@ -27,7 +27,7 @@ type KeyEdit = { mode: "keep" } | { mode: "replace"; value: string } | { mode: "
 type Form = {
   provider: ProviderId;
   anthropic: { model: string; effort: Effort; key: KeyEdit };
-  openai: { preset: string; base_url: string; model: string; tools_mode: ToolsMode; key: KeyEdit };
+  openai: { preset: string; base_url: string; model: string; content_model: string; tools_mode: ToolsMode; key: KeyEdit };
 };
 
 function formFrom(settings: AssistantSettings): Form {
@@ -38,6 +38,7 @@ function formFrom(settings: AssistantSettings): Form {
       preset: settings.openai_compatible.preset || "custom",
       base_url: settings.openai_compatible.base_url,
       model: settings.openai_compatible.model,
+      content_model: settings.openai_compatible.content_model ?? "",
       tools_mode: settings.openai_compatible.tools_mode,
       key: { mode: "keep" },
     },
@@ -59,6 +60,7 @@ function patchFrom(form: Form): AssistantSettingsPatch {
       preset: form.openai.preset,
       base_url: form.openai.base_url.trim(),
       model: form.openai.model.trim(),
+      content_model: form.openai.content_model.trim(),
       tools_mode: form.openai.tools_mode,
     },
   };
@@ -557,6 +559,20 @@ export function AssistantSettingsDrawer({
                   emptyLabel={t.as_set_models_none}
                 />
               </Field>
+              {form.openai.preset === "openrouter" ? (
+                <Field label={t.as_set_content_model} help={t.as_set_content_model_help}>
+                  <ModelCombobox
+                    value={form.openai.content_model}
+                    onChange={(content_model) => update((f) => ({ ...f, openai: { ...f.openai, content_model } }))}
+                    models={modelOptions}
+                    loading={modelsLoading}
+                    onRefresh={refreshModels}
+                    placeholder={form.openai.model || "deepseek/deepseek-v4.1-flash-1017"}
+                    refreshLabel={t.as_set_models_load}
+                    emptyLabel={t.as_set_models_none}
+                  />
+                </Field>
+              ) : null}
               <Field label={t.as_set_tools} help={t.as_set_tools_help}>
                 <Select
                   value={form.openai.tools_mode}

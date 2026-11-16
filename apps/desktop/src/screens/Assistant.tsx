@@ -8,6 +8,7 @@ import type { ToolActivity, UiMessage } from "../components/assistant/ChatMessag
 import { Composer } from "../components/assistant/Composer";
 import type { ComposerHandle } from "../components/assistant/Composer";
 import { ConversationList, MODE_ICON } from "../components/assistant/ConversationList";
+import { ModelPicker, readModeModel, rememberActiveProvider, writeModeModel } from "../components/assistant/ModelPicker";
 import { notConfiguredReason, useQuickActions } from "../components/assistant/shared";
 import type { View } from "../components/layout/nav";
 import { Badge, Button, InlineNotice, Modal, Skeleton } from "../components/ui";
@@ -57,6 +58,10 @@ export default function AssistantScreen(_props: { onNavigate?: (view: View) => v
   useEffect(loadSettings, [loadSettings]);
   const activeProvider = settings ? (settings.active_provider === "anthropic" ? settings.anthropic : settings.openai_compatible) : null;
   const configured = !!activeProvider?.configured;
+  const providerId = settings?.active_provider ?? null;
+  useEffect(() => {
+    if (providerId) rememberActiveProvider(providerId);
+  }, [providerId]);
   const providerLabel =
     settings?.active_provider === "anthropic"
       ? "Claude"
@@ -92,6 +97,9 @@ export default function AssistantScreen(_props: { onNavigate?: (view: View) => v
 
   // --- Composer state ------------------------------------------------------------------------
   const [mode, setMode] = useState<AssistantMode>("chat");
+  const [modelTick, setModelTick] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const modeModel = useMemo(() => readModeModel(providerId, mode), [providerId, mode, modelTick]);
   const [options, setOptions] = useState<ChatOptions>({});
   const [jobId, setJobId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -261,6 +269,7 @@ export default function AssistantScreen(_props: { onNavigate?: (view: View) => v
             mode: sendMode,
             options: sendOptions,
             job_id: sendJob,
+            model: readModeModel(providerId, sendMode) || null,
           },
           onEvent,
           controller.signal,
@@ -282,7 +291,7 @@ export default function AssistantScreen(_props: { onNavigate?: (view: View) => v
         void refreshList();
       }
     },
-    [activeId, jobId, mode, options, patchLast, refreshList, streaming, t],
+    [activeId, jobId, mode, options, patchLast, providerId, refreshList, streaming, t],
   );
 
   const lastUserText = useMemo(() => {
@@ -604,6 +613,23 @@ export default function AssistantScreen(_props: { onNavigate?: (view: View) => v
             disabled={!configured}
             onSend={(text) => void send(text)}
             onStop={stop}
+            modelSlot={
+              <ModelPicker
+                provider={providerId}
+                defaultModel={
+                  (mode === "write" && settings?.active_provider === "openai_compatible" && settings.openai_compatible.preset === "openrouter"
+                    ? settings.openai_compatible.content_model
+                    : "") || (activeProvider && "model" in activeProvider ? activeProvider.model : "")
+                }
+                value={modeModel}
+                disabled={!configured || streaming}
+                onChange={(model) => {
+                  if (!providerId) return;
+                  writeModeModel(providerId, mode, model);
+                  setModelTick((n) => n + 1);
+                }}
+              />
+            }
             banner={
               <>
                 {notConfiguredBanner}

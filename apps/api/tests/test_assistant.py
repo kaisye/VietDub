@@ -479,6 +479,17 @@ def test_openai_sends_bearer_key(env):
     assert "abcdefghij" not in masked
 
 
+def test_chat_can_pick_a_model_for_one_request(env):
+    client, http = env["client"], env["http"]
+    configure_openai(client, preset="openai", api_key="sk-proj-abcdefghijklmnop", model="gpt-4o-mini")
+    http.queue(openai_sse([oa_chunk({"content": "hi"}, finish="stop")]))
+    http.queue(openai_sse([oa_chunk({"content": "hi"}, finish="stop")]))
+    chat(client, message="Viết caption", mode="write", model="deepseek/deepseek-chat")
+    assert http.body(0)["model"] == "deepseek/deepseek-chat"
+    chat(client, message="hi")
+    assert http.body(1)["model"] == "gpt-4o-mini"  # The saved model is untouched.
+
+
 def test_openai_without_tool_support_falls_back_to_data_summary(env):
     client, http = env["client"], env["http"]
     configure_openai(client, model="gemma:2b")
@@ -672,3 +683,51 @@ def test_parse_json_object():
     assert assistant_engine.parse_json_object("text {\"a\": {\"b\": 2}} tail") == {"a": {"b": 2}}
     assert assistant_engine.parse_json_object("[1, 2]") is None
     assert assistant_engine.parse_json_object("nope") is None
+
+
+def test_content_is_written_with_the_content_model_on_openrouter(env):
+    client, http = env["client"], env["http"]
+    configure_openai(client, preset="openrouter", api_key="sk-or-abcdefghijklmnop", model="qwen/qwen3.7-flash")
+    for _ in range(3):
+        http.queue(openai_sse([oa_chunk({"content": "ok"}, finish="stop")]))
+    chat(client, message="Viết caption", mode="write")
+    chat(client, message="Kênh của tôi thế nào?")
+    chat(client, message="Viết caption", mode="write", model="deepseek/deepseek-chat")
+    assert [http.body(i)["model"] for i in range(3)] == [
+        assistant_settings.DEFAULT_CONTENT_MODEL,
+        "qwen/qwen3.7-flash",  # Q&A keeps the main model.
+        "deepseek/deepseek-chat",  # An explicit pick wins.
+    ]
+
+    # Other OpenAI-compatible servers do not serve OpenRouter ids: no content model there.
+    configure_openai(client)
+    http.queue(openai_sse([oa_chunk({"content": "ok"}, finish="stop")]))
+    chat(client, message="Viết caption", mode="write")
+    assert http.body(3)["model"] == "qwen3:8b"
+
+
+def test_post_drafts_for_a_job(env):
+    client, http = env["client"], env["http"]
+    job_id = seed_job(env)
+    configure_openai(client, preset="openrouter", api_key="sk-or-abcdefghijklmnop")
+    drafts = {
+        "drafts": [
+            {"title": "A", "caption": "Bài A", "hashtags": ["#iphone", "review"]},
+            {"title": "B", "caption": "Bài B", "hashtags": "#apple #longtieng"},
+            {"title": "C", "caption": "thừa", "hashtags": []},
+        ]
+    }
+    http.queue(openai_sse([oa_chunk({"content": json.dumps(drafts, ensure_ascii=False)}, finish="stop")]))
+    response = client.post(f"/api/assistant/jobs/{job_id}/post-drafts", json={"platform": "facebook", "count": 2})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["drafts"] == [
+        {"title": "A", "caption": "Bài A", "hashtags": ["#iphone", "#review"]},
+        {"title": "B", "caption": "Bài B", "hashtags": ["#apple", "#longtieng"]},
+    ]
+    sent = http.body(0)
+    assert sent["model"] == assistant_settings.DEFAULT_CONTENT_MODEL
+    prompt = sent["messages"][-1]["content"]
+    assert "Nền tảng: Facebook" in prompt and "Số phương án: 2" in prompt and "Hôm nay mình review iPhone." in prompt
+
+    assert client.post("/api/assistant/jobs/missing/post-drafts", json={}).status_code == 404

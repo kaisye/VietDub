@@ -199,3 +199,59 @@ def job_content_user_prompt(job: dict[str, Any], transcript: str, truncated: boo
     note = " (đã rút gọn, chỉ là phần đầu)" if truncated else ""
     body = transcript.strip() or "(không có transcript — chỉ dựa vào tiêu đề và mô tả)"
     return "\n".join(lines) + f"\n\nTranscript{note}:\n<transcript>\n{body}\n</transcript>"
+
+
+# ------------------------------------------------------------- calendar post drafts
+
+POST_DRAFTS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "drafts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "caption": {"type": "string"},
+                    "hashtags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["title", "caption", "hashtags"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["drafts"],
+    "additionalProperties": False,
+}
+
+POST_DRAFTS_SYSTEM = """Bạn là chuyên gia viết nội dung mạng xã hội cho nhà sáng tạo Việt Nam, làm việc trong VietDub Studio.
+Nhiệm vụ: từ thông tin và transcript của một video đã lồng tiếng, viết các phương án bài đăng cho MỘT nền tảng để người dùng chọn.
+Chỉ trả về MỘT đối tượng JSON hợp lệ (không Markdown, không giải thích): {"drafts": [{"title", "caption", "hashtags"}, ...]}.
+- "title": tiêu đề video/bài đăng, ≤ 70 ký tự, từ khoá chính ở đầu.
+- "caption": nội dung đăng kèm, đúng văn phong nền tảng:
+  YouTube: mô tả 3–6 câu, 2 dòng đầu thu hút, cuối ghi nguồn video gốc nếu có.
+  Facebook: 2–4 đoạn ngắn, mở đầu gây tò mò, kết bằng câu kêu gọi tương tác.
+  TikTok: 1–2 câu ≤ 150 ký tự, giọng trẻ trung.
+  Không đặt hashtag trong caption.
+- "hashtags": 3–6 hashtag, mỗi phần tử bắt đầu bằng "#", không dấu cách.
+Các phương án phải KHÁC NHAU rõ rệt về góc tiếp cận (ví dụ: một phương án gây tò mò, một phương án tóm tắt giá trị/thông tin).
+Viết bằng tiếng Việt. Bám sát nội dung thật của video; không bịa chi tiết không có trong transcript."""
+
+
+def post_drafts_user_prompt(
+    job: dict[str, Any], transcript: str, truncated: bool, options: dict[str, str], count: int, extra: str
+) -> str:
+    lines = [
+        f"Số phương án: {count}",
+        f"Nền tảng: {PLATFORMS.get(options.get('platform', ''), options.get('platform') or 'Facebook')}",
+        f"Giọng điệu: {TONES.get(options.get('tone', ''), options.get('tone') or 'hấp dẫn, tự nhiên')}",
+        f"Tiêu đề gốc: {job['title']}",
+        f"URL gốc: {job.get('video_url') or ''}",
+    ]
+    if job.get("description"):
+        lines.append(f"Mô tả/ghi chú có sẵn: {job['description']}")
+    if extra:
+        lines.append(f"Yêu cầu thêm của người dùng: {extra}")
+    note = " (đã rút gọn, chỉ là phần đầu)" if truncated else ""
+    body = transcript.strip() or "(không có transcript — chỉ dựa vào tiêu đề và mô tả)"
+    return "\n".join(lines) + f"\n\nTranscript{note}:\n<transcript>\n{body}\n</transcript>"
