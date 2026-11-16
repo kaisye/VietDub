@@ -223,6 +223,7 @@ async def lifespan(app: FastAPI):
     _backup_sqlite_before_platform_migration()
     Base.metadata.create_all(bind=engine)
     ensure_schema_compatibility()
+    _ensure_scheduled_post_columns()
     apply_runtime_secrets_to_env()
     with next(get_db()) as db:
         seed_database(db)
@@ -400,6 +401,18 @@ def ensure_schema_compatibility() -> None:
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE media_jobs ADD COLUMN completed_at DATETIME")
+            )
+
+
+def _ensure_scheduled_post_columns() -> None:
+    inspector = inspect(engine)
+    if "scheduled_posts" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("scheduled_posts")}
+    if "video_path" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE scheduled_posts ADD COLUMN video_path VARCHAR(2048) NOT NULL DEFAULT ''")
             )
 
 

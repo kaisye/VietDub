@@ -270,3 +270,25 @@ def test_sync_auto_marks_planned_post_published(cal):
     assert after["status"] == "published"
     assert after["channel_video"]["title"] == "Phim lồng tiếng tập 1"
     assert after["published_url"] == "https://www.youtube.com/watch?v=vid1"
+
+
+def test_post_with_a_local_video_file(cal, tmp_path):
+    client = cal["cal"]
+    video = tmp_path / "Clip cuối tuần.mp4"
+    video.write_bytes(b"0" * 1234)
+    post = client.post("/api/calendar/posts", json={"title": "Bài video", "video_path": str(video)}).json()
+    assert post["video_path"] == str(video)
+    assert post["video_file"] == {"path": str(video), "name": "Clip cuối tuần.mp4", "exists": True, "size": 1234}
+
+    copy = client.post(f"/api/calendar/posts/{post['id']}/duplicate", json={}).json()
+    assert copy["video_path"] == str(video)
+
+    # A moved / deleted file stays linked but is reported missing.
+    video.unlink()
+    again = client.get(f"/api/calendar/posts/{post['id']}").json()
+    assert again["video_file"]["exists"] is False and again["video_file"]["size"] is None
+
+    assert client.patch(f"/api/calendar/posts/{post['id']}", json={"video_path": ""}).json()["video_file"] is None
+    bad = [str(video), "relative/clip.mp4", str(tmp_path / "notes.txt")]
+    (tmp_path / "notes.txt").write_text("x")
+    assert [client.patch(f"/api/calendar/posts/{post['id']}", json={"video_path": p}).status_code for p in bad] == [404, 400, 400]

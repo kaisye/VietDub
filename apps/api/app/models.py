@@ -601,6 +601,9 @@ class ScheduledPost(Base):
     # Light links (no FK cascade): jobs and synced videos may be deleted independently.
     media_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     channel_video_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # A video file on this machine to post (instead of / besides a dubbing project). Only the
+    # path is kept: the file is not copied, so moving it breaks the link (reported as missing).
+    video_path: Mapped[str] = mapped_column(String(2048), default="")
     # Naive UTC. NULL = unscheduled (idea backlog).
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # idea | draft | scheduled | published | failed | cancelled

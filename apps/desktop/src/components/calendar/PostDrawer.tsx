@@ -21,6 +21,8 @@ import type { Job } from "../../types";
 import { JobPicker, jobTitle } from "../assistant/JobPicker";
 import { PLATFORM_LABEL, PlatformIcon, fmtCompact, fmtDateTime } from "../channels/platform";
 import { Badge, Button, Drawer, Field, InlineNotice, Modal, Select, TextArea, TextField } from "../ui";
+import { LocalVideoField, fileStem } from "./LocalVideoField";
+import { PostDrafts } from "./PostDrafts";
 import { PublishModal } from "./PublishModal";
 import { LABEL_COLOR, combineLocal, fmtDayMonth, fmtTime, statusMeta, toDateInput, toTimeInput, weekdayName } from "./shared";
 
@@ -40,6 +42,9 @@ type Form = {
   jobId: string | null;
   jobLabel: string;
   jobThumb: string | null;
+  videoPath: string;
+  /** False when the saved file is gone (moved / deleted). */
+  videoExists: boolean;
   color: PostColor;
   label: string;
   notes: string;
@@ -61,6 +66,8 @@ function formFrom(target: DrawerTarget): Form {
       jobId: p.media_job_id,
       jobLabel: p.media_job?.title ?? (p.media_job_id ? p.media_job_id.slice(0, 8) : ""),
       jobThumb: p.media_job?.thumbnail_url ?? null,
+      videoPath: p.video_path ?? "",
+      videoExists: p.video_file?.exists ?? true,
       color: p.color,
       label: p.label,
       notes: p.notes,
@@ -79,6 +86,8 @@ function formFrom(target: DrawerTarget): Form {
     jobId: null,
     jobLabel: "",
     jobThumb: null,
+    videoPath: "",
+    videoExists: true,
     color: "",
     label: "",
     notes: "",
@@ -206,6 +215,8 @@ export function PostDrawer({
       caption: form.caption,
       hashtags: form.hashtags,
       media_job_id: form.jobId,
+      // Unchanged paths are not resent: a moved file must not block saving the rest.
+      ...(form.videoPath !== (post?.video_path ?? "") ? { video_path: form.videoPath } : {}),
       color: form.color,
       label: form.label.trim(),
       notes: form.notes,
@@ -435,29 +446,6 @@ export function PostDrawer({
             </div>
           ) : null}
 
-          <Field label={t.cal_field_caption}>
-            <TextArea
-              value={form.caption}
-              maxLength={10000}
-              rows={4}
-              placeholder={t.cal_field_caption_ph}
-              onChange={(e) => set("caption", e.target.value)}
-            />
-          </Field>
-
-          <Field label={t.cal_field_hashtags} help={t.cal_field_hashtags_help}>
-            <TextField value={form.hashtags} placeholder="#review #longtieng" onChange={(e) => set("hashtags", e.target.value)} />
-          </Field>
-          {tags.length ? (
-            <div className="-mt-2 flex flex-wrap gap-1">
-              {tags.slice(0, 30).map((tag, i) => (
-                <Badge key={`${tag}-${i}`} tone="primary" size="sm">
-                  #{tag}
-                </Badge>
-              ))}
-            </div>
-          ) : null}
-
           <div className="grid gap-1.5">
             <span className="text-[13px] font-semibold text-[var(--text-primary)]">{t.cal_field_job}</span>
             <div className="relative" data-job-picker-anchor>
@@ -510,6 +498,69 @@ export function PostDrawer({
               />
             </div>
           </div>
+
+          <LocalVideoField
+            t={t}
+            path={form.videoPath}
+            exists={form.videoExists}
+            onChange={(videoPath) =>
+              setForm((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      videoPath,
+                      videoExists: true,
+                      title: prev.title || (videoPath ? fileStem(videoPath) : ""),
+                    }
+                  : prev,
+              )
+            }
+            onError={setError}
+          />
+
+          {form.jobId ? (
+            <PostDrafts
+              t={t}
+              jobId={form.jobId}
+              platform={form.platform}
+              autoStart={!form.caption.trim()}
+              onPick={(draft) =>
+                setForm((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        title: draft.title || prev.title,
+                        caption: draft.caption,
+                        hashtags: draft.hashtags.join(" "),
+                      }
+                    : prev,
+                )
+              }
+            />
+          ) : null}
+
+          <Field label={t.cal_field_caption}>
+            <TextArea
+              value={form.caption}
+              maxLength={10000}
+              rows={4}
+              placeholder={t.cal_field_caption_ph}
+              onChange={(e) => set("caption", e.target.value)}
+            />
+          </Field>
+
+          <Field label={t.cal_field_hashtags} help={t.cal_field_hashtags_help}>
+            <TextField value={form.hashtags} placeholder="#review #longtieng" onChange={(e) => set("hashtags", e.target.value)} />
+          </Field>
+          {tags.length ? (
+            <div className="-mt-2 flex flex-wrap gap-1">
+              {tags.slice(0, 30).map((tag, i) => (
+                <Badge key={`${tag}-${i}`} tone="primary" size="sm">
+                  #{tag}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-[auto_minmax(0,1fr)] items-end gap-3">
             <div className="grid gap-1.5">

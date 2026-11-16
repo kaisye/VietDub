@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -40,6 +41,7 @@ class PostBase(BaseModel):
     platform: Platform | None = None
     channel_id: str | None = None
     media_job_id: str | None = None
+    video_path: str | None = Field(default=None, max_length=2048)
     scheduled_at: str | None = None
     status: Status | None = None
     published_url: str | None = Field(default=None, max_length=2048)
@@ -105,6 +107,35 @@ def clean_url(value: str | None) -> str:
     return value
 
 
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+
+
+def clean_video_path(value: str | None) -> str:
+    """An existing local video file (absolute path), or "" to unlink."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise HTTPException(400, "video_path must be an absolute path.")
+    if path.suffix.lower() not in VIDEO_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported video file: {path.name}")
+    if not path.is_file():
+        raise HTTPException(404, f"Video file not found: {path}")
+    return str(path)
+
+
+def video_file_view(video_path: str) -> dict[str, Any] | None:
+    if not video_path:
+        return None
+    path = Path(video_path)
+    try:
+        size = path.stat().st_size if path.is_file() else None
+    except OSError:
+        size = None
+    return {"path": video_path, "name": path.name, "exists": size is not None, "size": size}
+
+
 def _get_post(db: Session, post_id: str) -> ScheduledPost:
     post = db.get(ScheduledPost, post_id)
     if post is None:
@@ -157,6 +188,8 @@ def post_views(db: Session, posts: list[ScheduledPost]) -> list[dict[str, Any]]:
                     if job
                     else None
                 ),
+                "video_path": post.video_path or "",
+                "video_file": video_file_view(post.video_path or ""),
                 "scheduled_at": iso(post.scheduled_at),
                 "status": post.status,
                 "published_at": iso(post.published_at),
@@ -226,6 +259,8 @@ def apply_fields(db: Session, post: ScheduledPost, data: dict[str, Any]) -> None
         if job_id and db.get(MediaJob, job_id) is None:
             raise HTTPException(404, "Dubbing project not found")
         post.media_job_id = job_id
+    if "video_path" in data:
+        post.video_path = clean_video_path(data["video_path"])
     if "scheduled_at" in data:
         post.scheduled_at = parse_datetime(data["scheduled_at"])
     if "published_url" in data:
@@ -399,6 +434,7 @@ def duplicate_post(post_id: str, payload: DuplicateRequest | None = None, db: Se
         platform=src.platform,
         channel_id=src.channel_id,
         media_job_id=src.media_job_id,
+        video_path=src.video_path,
         scheduled_at=scheduled_at,
         status=status,
         notes=src.notes,

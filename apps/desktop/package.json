@@ -12,6 +12,7 @@
     "check:rs": "powershell -ExecutionPolicy Bypass -Command \"$null=New-Item -ItemType Directory -Force src-tauri/binaries; $f='src-tauri/binaries/videodubbing-api-x86_64-pc-windows-msvc.exe'; if(!(Test-Path $f)){New-Item -ItemType File $f|Out-Null}\" && cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.0.0",
     "clsx": "2.1.1",

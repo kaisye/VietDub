@@ -27,6 +27,9 @@ export type CalendarPost = {
   } | null;
   media_job_id: string | null;
   media_job: { id: string; title: string; thumbnail_url: string | null; status: string } | null;
+  /** A video file on this machine ("" = none). Only the path is stored. */
+  video_path: string;
+  video_file: { path: string; name: string; exists: boolean; size: number | null } | null;
   scheduled_at: string | null;
   status: PostStatus;
   published_at: string | null;
@@ -56,6 +59,7 @@ export type PostInput = {
   platform?: Platform | null;
   channel_id?: string | null;
   media_job_id?: string | null;
+  video_path?: string;
   scheduled_at?: string | null;
   status?: PostStatus;
   published_url?: string;

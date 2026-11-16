@@ -429,6 +429,41 @@ fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Show a local file in Finder / Explorer (selected), e.g. a calendar post's video.
+#[tauri::command]
+fn reveal_local_file(path: String) -> Result<(), String> {
+    let file = PathBuf::from(&path);
+    if !file.is_absolute() || !file.exists() {
+        return Err(format!("File not found: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&file)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // explorer's /select, takes the path in the same argument.
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", file.display()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let folder = file.parent().unwrap_or(&file).to_path_buf();
+        std::process::Command::new("xdg-open")
+            .arg(folder)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn install_wsl_ubuntu() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(install_wsl_ubuntu_blocking)
@@ -513,9 +548,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             open_external_url,
+            reveal_local_file,
             install_wsl_ubuntu,
             start_9router,
             status_9router,
