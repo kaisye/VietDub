@@ -65,7 +65,7 @@ export type CreateDraft = {
     audio_review: boolean;
     final_review: boolean;
     auto_render: boolean;
-    /** Auto review after dubbing (optional: drafts saved before it existed use the backend default "propose"). */
+    /** Auto review before rendering (optional: drafts saved before it existed use the backend default "safe"). */
     auto_review?: "off" | "report" | "propose" | "safe";
   };
   output: {
@@ -131,7 +131,7 @@ export function createDefaultDraft(mode: CreateMode = "quick_video"): CreateDraf
       audio_review: false,
       final_review: false,
       auto_render: true,
-      auto_review: "propose",
+      auto_review: "safe",
     },
     output: {
       render_mode: "auto",

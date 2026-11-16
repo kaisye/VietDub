@@ -2239,15 +2239,15 @@ function OutputStep({ draft, patch }: DraftStepProps) {
             description={t.out_auto_render_desc}
           />
           <Switch
-            checked={(draft.workflow.auto_review ?? "propose") !== "off"}
-            onChange={(on) => patch("workflow", { ...draft.workflow, auto_review: on ? "propose" : "off" })}
+            checked={(draft.workflow.auto_review ?? "safe") !== "off"}
+            onChange={(on) => patch("workflow", { ...draft.workflow, auto_review: on ? "safe" : "off" })}
             label={t.ar_wizard_label}
             description={t.ar_wizard_desc}
           />
-          {(draft.workflow.auto_review ?? "propose") !== "off" ? (
-            <Field label={t.ar_title} help={t[`ar_mode_${draft.workflow.auto_review ?? "propose"}_hint` as "ar_mode_propose_hint"]}>
+          {(draft.workflow.auto_review ?? "safe") !== "off" ? (
+            <Field label={t.ar_title} help={t[`ar_mode_${draft.workflow.auto_review ?? "safe"}_hint` as "ar_mode_safe_hint"]}>
               <Select
-                value={draft.workflow.auto_review ?? "propose"}
+                value={draft.workflow.auto_review ?? "safe"}
                 onChange={(event) => patch("workflow", { ...draft.workflow, auto_review: event.target.value as "report" | "propose" | "safe" })}
               >
                 <option value="report">{t.ar_mode_report}</option>

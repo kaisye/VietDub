@@ -913,6 +913,13 @@ def _continue_after_translation(
     _persist_job_log(job)
     db.commit()
 
+    # Review the dub now, while fixing it is cheap, instead of after the render:
+    # safe fixes (timing, borrowed silence, fragment merges with a new take) are
+    # applied to the editor workspace, which is then what gets rendered.
+    reviewed_workspace = None
+    if voice_enabled:
+        reviewed_workspace = _review_before_render(db, job, configuration)
+
     if configuration and not configuration.workflow.auto_render:
         # "Edit before rendering": everything the editor needs (source video, voice
         # chunks, subtitles, background audio) exists now, so stop here and let the
@@ -931,7 +938,8 @@ def _continue_after_translation(
         _persist_job_log(job)
         db.commit()
         clear_progress(job.id)
-        _start_auto_review(db, job, configuration)
+        if reviewed_workspace is None:
+            _start_auto_review(db, job, configuration)
         return
 
     render_quality = (
@@ -944,24 +952,34 @@ def _continue_after_translation(
         90,
         f"Rendering localized video ({render_quality})",
     )
-    output_path = render_video(
-        raw_video_path,
-        audio_path,
-        display_subtitle_path if subtitle_enabled else None,
-        audio_bed.path,
-        render_quality,
-        subtitle_style=(
-            configuration.subtitle.style_snapshot
-            if configuration and subtitle_enabled
-            else None
-        ),
-        audio_mix=configuration.audio.model_dump(mode="json")
-        if configuration
-        else None,
-        aspect_ratio=configuration.output.aspect_ratio if configuration else "source",
-        max_lines=configuration.subtitle.max_lines if configuration else 2,
-        output_filename=output_filename,
-    )
+    if reviewed_workspace is not None:
+        # Render what the review fixed: the editor workspace, voiced clip by clip.
+        output_path = editor.render_workspace(
+            reviewed_workspace,
+            configuration.model_dump(mode="json") if configuration else None,
+            render_quality=render_quality,
+            burn_subtitles=subtitle_enabled,
+            output_filename=output_filename,
+        )
+    else:
+        output_path = render_video(
+            raw_video_path,
+            audio_path,
+            display_subtitle_path if subtitle_enabled else None,
+            audio_bed.path,
+            render_quality,
+            subtitle_style=(
+                configuration.subtitle.style_snapshot
+                if configuration and subtitle_enabled
+                else None
+            ),
+            audio_mix=configuration.audio.model_dump(mode="json")
+            if configuration
+            else None,
+            aspect_ratio=configuration.output.aspect_ratio if configuration else "source",
+            max_lines=configuration.subtitle.max_lines if configuration else 2,
+            output_filename=output_filename,
+        )
     _raise_if_cancelled(job.id)
     _log_artifact(job, output_path)
 
@@ -979,7 +997,55 @@ def _continue_after_translation(
     _persist_job_log(job)
     db.commit()
     clear_progress(job.id)
-    _start_auto_review(db, job, configuration)
+    if reviewed_workspace is None:
+        _start_auto_review(db, job, configuration)
+
+
+def _review_before_render(
+    db: Session, job: MediaJob, configuration: ProductionConfiguration | None
+) -> dict | None:
+    """Run the auto review on the fresh dub and apply its pre-render fixes.
+
+    Returns the reviewed editor workspace to render from, or None to render the
+    pipeline output as before (review off or disabled, the user already has a
+    workspace with edits, or the review failed; a review never fails the job).
+    """
+    mode = configuration.workflow.auto_review if configuration else "propose"
+    if mode == "off" or os.getenv("AETHER_REVIEW_BEFORE_RENDER", "1").strip().lower() in {"0", "false", "off"}:
+        return None
+    if editor.load_workspace(job.id) is not None:
+        return None  # Never overwrite edits made in the editor.
+    _set_step(db, job, MediaJobStatus.rendering, 86, "Auto review before render")
+    try:
+        from .services.auto_review import runner as auto_review
+
+        config_dict = configuration.model_dump(mode="json") if configuration else None
+        with editor.workspace_lock(job.id):
+            editor.apply_carry_over(editor.build_workspace(job.id, config_dict, job.source_title or ""))
+        result = auto_review.review_before_render(
+            job.id,
+            mode=mode,
+            configuration=config_dict,
+            title=job.source_title or "",
+            source_language=job.source_language or "auto",
+            voice_settings=editor_voice_settings(job),
+        )
+        with editor.workspace_lock(job.id):
+            workspace = editor.load_workspace(job.id)
+        job.logs = append_log(
+            job.logs,
+            "Auto review before render: "
+            f"{result.get('applied', 0)} fixes applied, {result.get('pending', 0)} waiting for approval, "
+            f"score {result.get('score_before')} -> {result.get('score')}.",
+        )
+        _persist_job_log(job)
+        db.commit()
+        return workspace
+    except Exception as exc:  # noqa: BLE001 — fall back to rendering the unreviewed dub.
+        job.logs = append_log(job.logs, f"Auto review before render skipped: {exc}")
+        _persist_job_log(job)
+        db.commit()
+        return None
 
 
 def _voice_spans(audio_path: Path) -> list[tuple[float, float] | None] | None:

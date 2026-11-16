@@ -125,8 +125,9 @@ class WorkflowConfiguration(ConfigurationModel):
     final_review: bool = True
     auto_render: bool = True
     # Auto review after dubbing: off | report (issues only) | propose (fixes wait for
-    # approval) | safe (low-risk timing / speed / subtitle-cut fixes applied automatically).
-    auto_review: Literal["off", "report", "propose", "safe"] = "propose"
+    # approval) | safe (low-risk fixes and fragment merges applied automatically, before
+    # the render).
+    auto_review: Literal["off", "report", "propose", "safe"] = "safe"
 
 
 class OutputConfiguration(ConfigurationModel):

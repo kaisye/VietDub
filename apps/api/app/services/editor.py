@@ -1047,6 +1047,7 @@ def render_workspace(
     *,
     render_quality: str,
     burn_subtitles: bool,
+    output_filename: str | None = None,
 ) -> Path:
     job_id = workspace["job_id"]
     workdir = workspace_dir(job_id)
@@ -1099,7 +1100,7 @@ def render_workspace(
         },
         aspect_ratio=(output.get("output") or {}).get("aspect_ratio", "source"),
         max_lines=workspace["max_lines"],
-        output_filename=f"{job_id}-edit-{uuid.uuid4().hex[:6]}.mp4",
+        output_filename=output_filename or f"{job_id}-edit-{uuid.uuid4().hex[:6]}.mp4",
         **({"music_audio_path": music_track} if music_track else {}),
         text_overlays=text_overlays.normalize_text_overlays(workspace.get("text_overlays"), workspace["duration"]),
     )

@@ -322,6 +322,69 @@ def _run_review(job_id: str, mode: str, source_language: str, voice_settings: di
         _RUNNING.pop(job_id, None)
 
 
+PRE_RENDER_LABEL = "Tự sửa trước khi render"
+
+
+def _pre_render_fixable(proposal: dict[str, Any], proposals: list[dict[str, Any]]) -> bool:
+    """Fixes the pipeline applies on its own before rendering.
+
+    Everything low-risk (timing, borrowed silence, mild speed-up, longer
+    subtitles, splits), plus merging a fragment into its sentence with a fresh
+    take: a new voice is cheap before the render. Rewrites change the wording
+    (LLM), so they stay proposals for the user to approve in the editor.
+    """
+    if proposal.get("status") != "pending" or proposal.get("needs_llm"):
+        return False
+    if proposal.get("risk") != "low" and proposal.get("kind") != "merge":
+        return False
+    by_id = {item["id"]: item for item in proposals}
+    return all(dep in by_id and _pre_render_fixable(by_id[dep], proposals) for dep in proposal.get("depends_on") or [])
+
+
+def review_before_render(
+    job_id: str,
+    *,
+    mode: str,
+    configuration: dict[str, Any] | None,
+    title: str = "",
+    source_language: str = "auto",
+    voice_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Review the fresh dub and fix what is safe to fix, synchronously, before the render.
+
+    ``report`` only records issues and ``propose`` changes nothing until the user
+    approves; ``safe`` applies the pre-render fixes, and whatever is left waits for
+    approval in the editor. Returns the review summary.
+    """
+    start_review(
+        job_id,
+        mode="report" if mode == "report" else "propose",
+        configuration=configuration,
+        title=title,
+        source_language=source_language,
+        voice_settings=voice_settings,
+        trigger="pipeline",
+        background=False,
+    )
+    review = load_review(job_id) or {}
+    if review.get("status") == "failed":
+        raise RuntimeError(review.get("error") or "Auto review failed.")
+    _update(job_id, mode=mode)
+    proposals = review.get("proposals") or []
+    ids = [proposal["id"] for proposal in proposals if _pre_render_fixable(proposal, proposals)]
+    if mode == "safe" and ids:
+        with _REGISTRY:
+            if job_id in _RUNNING:
+                raise RuntimeError("Đang rà soát hoặc áp dụng cho video này.")
+            _RUNNING[job_id] = "apply"
+        try:
+            _update(job_id, applying={"status": "running", "done": 0, "total": len(ids), "started_at": _now()})
+            _apply_run(job_id, ids, voice_settings or {}, label=PRE_RENDER_LABEL, auto=True)
+        finally:
+            _RUNNING.pop(job_id, None)
+    return summary(load_review(job_id))
+
+
 def _is_safe(proposal: dict[str, Any], proposals: list[dict[str, Any]]) -> bool:
     if proposal.get("risk") != "low" or proposal.get("needs_tts") or proposal.get("needs_llm"):
         return False

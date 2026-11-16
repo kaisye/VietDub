@@ -1426,8 +1426,8 @@ const vi = {
   ar_mode_propose: "Đề xuất sửa",
   ar_mode_safe: "Tự sửa an toàn",
   ar_mode_report_hint: "Chỉ liệt kê vấn đề, không đề xuất gì.",
-  ar_mode_propose_hint: "Tính sẵn cách sửa; không thay đổi gì cho tới khi bạn duyệt.",
-  ar_mode_safe_hint: "Tự áp dụng sửa nhịp, tốc độ và cắt phụ đề an toàn; câu viết lại bằng AI vẫn chờ duyệt.",
+  ar_mode_propose_hint: "Rà soát trước khi render và tính sẵn cách sửa; không thay đổi gì cho tới khi bạn duyệt trong Editor.",
+  ar_mode_safe_hint: "Trước khi render, tự sửa nhịp, tốc độ, cắt phụ đề và gộp mẩu câu (đọc lại giọng); câu viết lại bằng AI vẫn chờ duyệt.",
   ar_run: "Rà soát",
   ar_rerun: "Rà soát lại",
   ar_phase_measure: "Đang đo các đoạn giọng…",
@@ -1519,7 +1519,7 @@ const vi = {
   out_auto_render_desc: "Tắt để dừng trước bước render: mở Editor chỉnh phụ đề, giọng, chữ trên màn hình rồi bấm Render một lần.",
   progress_unrendered_title: "Sẵn sàng để chỉnh sửa",
   progress_unrendered_desc: "Đã dịch và lồng tiếng xong, video chưa được render. Mở Editor để chỉnh rồi bấm Render.",
-  ar_wizard_desc: "Khi lồng tiếng xong, kiểm tra câu đọc quá nhanh/chậm, giọng chồng nhau và phụ đề cắt chưa khéo.",
+  ar_wizard_desc: "Trước khi render, kiểm tra câu đọc quá nhanh/chậm, giọng chồng nhau và phụ đề cắt chưa khéo.",
   // ── end Auto review ──
   // ── Editor audio tracks & music (screens/editor/music/*) ──
   mu_tab: "Âm nhạc",
@@ -3031,8 +3031,8 @@ const en: T = {
   ar_mode_propose: "Suggest fixes",
   ar_mode_safe: "Auto-fix safe",
   ar_mode_report_hint: "Lists problems, proposes nothing.",
-  ar_mode_propose_hint: "Prepares fixes; nothing changes until you approve.",
-  ar_mode_safe_hint: "Applies safe timing, speed and subtitle-cut fixes; AI rewrites still wait for approval.",
+  ar_mode_propose_hint: "Reviews before rendering and prepares fixes; nothing changes until you approve in the Editor.",
+  ar_mode_safe_hint: "Before rendering, fixes timing, speed, subtitle cuts and merges sentence fragments (re-voicing them); AI rewrites still wait for approval.",
   ar_run: "Run review",
   ar_rerun: "Review again",
   ar_phase_measure: "Measuring voice takes…",
@@ -3124,7 +3124,7 @@ const en: T = {
   out_auto_render_desc: "Turn off to stop before rendering: open the Editor, adjust subtitles, voice and on-screen text, then render once.",
   progress_unrendered_title: "Ready for editing",
   progress_unrendered_desc: "Translation and dubbing are done; the video has not been rendered yet. Open the Editor to adjust it, then render.",
-  ar_wizard_desc: "When dubbing finishes, check for rushed/dragging lines, overlapping voices and badly cut subtitles.",
+  ar_wizard_desc: "Before rendering, check for rushed/dragging lines, overlapping voices and badly cut subtitles.",
   // ── end Auto review ──
   // ── Editor audio tracks & music (screens/editor/music/*) ──
   mu_tab: "Music",
