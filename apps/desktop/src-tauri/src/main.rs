@@ -171,7 +171,43 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
     let runtime_dir = data_dir.join("runtime");
     let _ = std::fs::create_dir_all(&runtime_dir);
 
-    let mut command = if let Some(managed) = managed_backend::managed_backend_executable(&data_dir)
+    // `tauri dev` copies the frozen sidecar from an earlier release build into
+    // target/debug. Running it would test stale backend code against the real
+    // VietDub Studio data (debug and release share the app identifier), so debug
+    // builds run the backend from source on the repo's own storage instead.
+    let dev_repo_root = if cfg!(debug_assertions) {
+        find_repo_root()
+    } else {
+        None
+    };
+
+    let mut command = if let Some(repo_root) = dev_repo_root.as_ref() {
+        // The repo's .venv (created by launch.command) has the backend's packages.
+        let venv_python = repo_root.join(".venv").join(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+        let python = if std::env::var("AETHER_PYTHON").is_err() && venv_python.exists() {
+            venv_python.to_string_lossy().into_owned()
+        } else {
+            python.clone()
+        };
+        eprintln!("[desktop] Dev build: running the backend from source with {python}");
+        let mut c = Command::new(&python);
+        c.current_dir(repo_root).args([
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port,
+            "--app-dir",
+            "apps/api",
+        ]);
+        c
+    } else if let Some(managed) = managed_backend::managed_backend_executable(&data_dir)
     {
         // Opt-in backend delta track: a verified, newer backend downloaded into
         // the per-user data dir takes precedence over the bundled sidecar.
@@ -216,11 +252,14 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
         c
     };
 
+    if dev_repo_root.is_none() {
+        command
+            .env("AETHER_DATA_DIR", &data_dir)
+            .env("AETHER_RUNTIME_DIR", &runtime_dir);
+    }
     command
         .env("AETHER_API_HOST", "127.0.0.1")
         .env("AETHER_API_PORT", &port)
-        .env("AETHER_DATA_DIR", &data_dir)
-        .env("AETHER_RUNTIME_DIR", &runtime_dir)
         // The backend exits by itself once this process is gone, so a crash or a
         // force-quit of the shell never leaves an orphaned server behind.
         .env("AETHER_PARENT_PID", std::process::id().to_string());
