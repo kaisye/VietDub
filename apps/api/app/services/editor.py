@@ -7,7 +7,9 @@ workspace remixes the per-segment audio and burns the edited subtitles.
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -17,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import music_library, music_mix, tts
+from . import music_library, music_mix, text_overlays, tts
 from .audio_bed import prepare_background_audio
 from .renderer import (
     _probe_dimensions,
@@ -130,6 +132,7 @@ def build_workspace(job_id: str, configuration: dict[str, Any] | None, title: st
         "max_lines": default_max_lines(configuration),
         "original_regions": [],
         "audio_tracks": [],
+        "text_overlays": [],
         "segments": segments,
         "render": {"status": "idle"},
     }
@@ -239,6 +242,7 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
         **workspace,
         # Workspaces saved before audio tracks existed have none.
         "audio_tracks": music_mix.normalize_audio_tracks(workspace.get("audio_tracks"), workspace["duration"]),
+        "text_overlays": text_overlays.normalize_text_overlays(workspace.get("text_overlays"), workspace["duration"]),
         "segments": flagged,
         "subtitle": layout,
     }
@@ -254,6 +258,7 @@ def patch_workspace(
     original_regions: list[dict[str, Any]] | None = None,
     audio_tracks: list[dict[str, Any]] | None = None,
     audio_ops: list[dict[str, Any]] | None = None,
+    overlays: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     by_id = {segment["id"]: segment for segment in workspace["segments"]}
     for update in segment_updates or []:
@@ -295,6 +300,8 @@ def patch_workspace(
             audio_ops,
             workspace["duration"],
         )
+    if overlays is not None:
+        workspace["text_overlays"] = text_overlays.normalize_text_overlays(overlays, workspace["duration"])
     return save_workspace(workspace)
 
 
@@ -617,6 +624,65 @@ def thumbnails(workspace: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+# Codecs every desktop webview decodes. WebKit (the macOS Tauri webview) has no AV1
+# decoder on Macs without hardware support (M1/M2), so such sources need a proxy.
+PREVIEW_VIDEO_CODECS = {"h264"}
+PREVIEW_AUDIO_CODECS = {"aac", "mp3"}
+_PREVIEW_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _stream_codecs(path: Path) -> tuple[str, str]:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "json", str(path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    streams = json.loads(result.stdout or "{}").get("streams", []) if result.returncode == 0 else []
+    first = lambda kind: next((s.get("codec_name", "") for s in streams if s.get("codec_type") == kind), "")  # noqa: E731
+    return first("video"), first("audio")
+
+
+def preview_video(workspace: dict[str, Any]) -> dict[str, Any]:
+    """Video the editor preview plays: the source itself, or a cached H.264/AAC proxy.
+
+    Only the preview uses the proxy; renders keep reading the original source.
+    """
+    video = _path_from_storage_url(workspace["video_url"])
+    if not video or not video.exists():
+        raise FileNotFoundError("Không tìm thấy video gốc của job này.")
+    video_codec, audio_codec = _stream_codecs(video)
+    if video_codec in PREVIEW_VIDEO_CODECS and audio_codec in PREVIEW_AUDIO_CODECS | {""}:
+        return {"url": workspace["video_url"], "proxy": False, "codec": video_codec}
+
+    directory = workspace_dir(workspace["job_id"])
+    proxy = directory / "preview.mp4"
+    stamp = f"{video.name}:{video.stat().st_size}:{int(video.stat().st_mtime)}"
+    stamp_path = directory / "preview.json"
+    # A file lock as well as the thread lock: after a dev reload the old process (or its
+    # ffmpeg) may still be encoding, and two encoders must never share an output file.
+    with _PREVIEW_LOCKS.setdefault(workspace["job_id"], threading.Lock()), open(directory / "preview.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (proxy.exists() and stamp_path.exists() and json.loads(stamp_path.read_text("utf-8")).get("source") == stamp):
+            for stale in directory.glob("preview.*.tmp.mp4"):  # Left by an encoder whose backend died.
+                stale.unlink(missing_ok=True)
+            tmp = directory / f"preview.{os.getpid()}.{uuid.uuid4().hex[:6]}.tmp.mp4"
+            base = ["ffmpeg", "-v", "error", "-y", "-i", str(video), "-map", "0:v:0", "-map", "0:a:0?", "-sn"]
+            tail = [
+                "-vf", "scale=-2:'min(ih,1080)'", "-pix_fmt", "yuv420p", "-g", "48",
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(tmp),
+            ]
+            # Hardware encoder first (fast on macOS), software x264 as the fallback.
+            for encoder in (["-c:v", "h264_videotoolbox", "-b:v", "6M"], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]):
+                done = subprocess.run(base + encoder + tail, capture_output=True, timeout=3600)
+                if done.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+                    break
+            else:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError(f"Không chuyển được video {video_codec or '?'} sang H.264 để xem trước.")
+            tmp.replace(proxy)
+            stamp_path.write_text(json.dumps({"source": stamp}), encoding="utf-8")
+    return {"url": _storage_url(proxy), "proxy": True, "codec": video_codec}
+
+
 def regenerate_segment_audio(
     workspace: dict[str, Any],
     segment_id: str,
@@ -780,7 +846,7 @@ def retranslate_segment(
     return save_workspace(workspace)
 
 
-EDITABLE_KEYS = ("segments", "blur", "audio", "style", "max_lines", "original_regions", "audio_tracks")
+EDITABLE_KEYS = ("segments", "blur", "audio", "style", "max_lines", "original_regions", "audio_tracks", "text_overlays")
 _DERIVED_SEGMENT_KEYS = {"issues", "display"}
 
 
@@ -801,6 +867,8 @@ def replace_state(workspace: dict[str, Any], state: dict[str, Any]) -> dict[str,
     workspace["original_regions"] = normalize_regions(state["original_regions"], workspace["duration"])
     if state.get("audio_tracks") is not None:  # Older clients' snapshots have no audio tracks.
         workspace["audio_tracks"] = music_mix.normalize_audio_tracks(state["audio_tracks"], workspace["duration"])
+    if state.get("text_overlays") is not None:  # Likewise for text boxes.
+        workspace["text_overlays"] = text_overlays.normalize_text_overlays(state["text_overlays"], workspace["duration"])
     return save_workspace(workspace)
 
 
@@ -808,6 +876,49 @@ def drafts_dir(job_id: str) -> Path:
     path = workspace_dir(job_id) / "drafts"
     path.mkdir(exist_ok=True)
     return path
+
+
+# Edits that do not depend on the voice takes; kept when the job's voice changes.
+VOICE_INDEPENDENT_KEYS = ("blur", "audio", "style", "max_lines", "original_regions", "audio_tracks", "text_overlays")
+CARRY_OVER_FILE = "carry-over.json"
+
+
+def retire_for_new_voice(job_id: str, voice_name: str) -> bool:
+    """Called when the job's voice is changed: the workspace points at the old takes.
+
+    The whole workspace is kept as a draft, its voice-independent edits are set aside
+    for the next build (see apply_carry_over), and it is removed so the editor rebuilds
+    from the new voice. Returns whether there was a workspace.
+    """
+    with workspace_lock(job_id):
+        workspace = load_workspace(job_id)
+        if workspace is None:
+            return False
+        save_draft(workspace, f"Trước khi đổi sang giọng {voice_name}")
+        carry = {key: workspace[key] for key in VOICE_INDEPENDENT_KEYS if key in workspace}
+        directory = workspace_dir(job_id)
+        (directory / CARRY_OVER_FILE).write_text(json.dumps(carry, ensure_ascii=False), encoding="utf-8")
+        workspace_path(job_id).unlink(missing_ok=True)
+        # Review findings name cues of the old takes.
+        (directory / "auto-review.json").unlink(missing_ok=True)
+        return True
+
+
+def apply_carry_over(workspace: dict[str, Any]) -> dict[str, Any]:
+    """Puts the edits kept by retire_for_new_voice onto a freshly built workspace."""
+    path = workspace_dir(workspace["job_id"]) / CARRY_OVER_FILE
+    if not path.exists():
+        return workspace
+    try:
+        carry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        carry = {}
+    for key in VOICE_INDEPENDENT_KEYS:
+        if key in carry:
+            workspace[key] = carry[key]
+    workspace = save_workspace(workspace)
+    path.unlink(missing_ok=True)
+    return workspace
 
 
 def save_draft(workspace: dict[str, Any], name: str = "") -> dict[str, Any]:
@@ -955,6 +1066,7 @@ def render_workspace(
         max_lines=workspace["max_lines"],
         output_filename=f"{job_id}-edit-{uuid.uuid4().hex[:6]}.mp4",
         **({"music_audio_path": music_track} if music_track else {}),
+        text_overlays=text_overlays.normalize_text_overlays(workspace.get("text_overlays"), workspace["duration"]),
     )
 
 

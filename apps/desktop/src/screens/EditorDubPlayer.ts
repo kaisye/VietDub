@@ -1,11 +1,13 @@
 import { outputUrl } from "../api";
 import type { EditorSegment } from "../types";
+import { outputLatency } from "./editor/audioDelay";
 
 const LOOKAHEAD = 8; // seconds of upcoming voice cues decoded ahead of the playhead
 const MAX_DRIFT = 0.12; // re-sync only when the voice is this far from the video…
 const DRIFT_FRAMES = 4; // …for this many frames in a row (video clock jitter / start-up)
 const JUMP = 0.35; // a drift this large is a seek: re-sync at once
 const CACHE_SIZE = 40;
+const RETRY_FAILED_MS = 4000; // a take that failed to load is fetched again after this
 
 type Playing = { key: string; source: AudioBufferSourceNode; ctxStart: number; offset: number };
 
@@ -55,7 +57,7 @@ export class DubPlayer {
 
   /**
    * Timeline position heard right now when the video shows `t`: Web Audio is heard only
-   * after the output latency (large on Bluetooth), so voice cues are picked this far ahead
+   * after the output latency (large on Bluetooth; plus the manual delay, see audioDelay.ts), so voice cues are picked this far ahead
    * and start on time instead of losing their first syllable.
    */
   heardTime(t: number): number {
@@ -120,9 +122,7 @@ export class DubPlayer {
   }
 
   private latency(): number {
-    const ctx = this.ctx as (AudioContext & { outputLatency?: number }) | null;
-    if (!ctx) return 0;
-    return Math.min(0.5, (ctx.baseLatency || 0) + (ctx.outputLatency || 0));
+    return this.ctx ? outputLatency(this.ctx) : 0;
   }
 
   private clockStalled(): boolean {
@@ -179,7 +179,14 @@ export class DubPlayer {
       .then((data) => ctx.decodeAudioData(data))
       .then(
         (buffer) => this.remember(url, buffer),
-        () => this.remember(url, null),
+        () => {
+          // Skip the take for now, but try again later: the file may be being rewritten
+          // (voice change, regeneration), and a cached failure would keep the cue silent.
+          this.remember(url, null);
+          window.setTimeout(() => {
+            if (this.buffers.get(url) === null) this.buffers.delete(url);
+          }, RETRY_FAILED_MS);
+        },
       )
       .finally(() => this.loading.delete(url));
     this.loading.set(url, task);

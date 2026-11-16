@@ -11,6 +11,7 @@ import { Timeline, type TimelineApi, type TrackState } from "./timeline/Timeline
 import { ShortcutsHelp, Toolbar } from "./Toolbar";
 import { useAutoReview } from "./useAutoReview";
 import { useAudioTracks } from "./music/useAudioTracks";
+import { makeTextOverlay } from "./text/model";
 import { useEditor } from "./useEditor";
 import { usePlayback } from "./usePlayback";
 import { loadPref, savePref, segmentAt } from "./utils";
@@ -138,9 +139,43 @@ export default function EditorScreen({
     [segments, editor, playback],
   );
 
+  /** New text box at `at`, selected with its text field focused. */
+  const addText = useCallback(
+    (at: number) => {
+      const current = editor.workspace;
+      if (!current) return;
+      const item = makeTextOverlay(at, current.duration, t.tx_default);
+      editor.saveTextOverlays([...(current.text_overlays ?? []), item], "add-text");
+      editor.selectText(item.id);
+      playback.pause();
+      window.setTimeout(() => {
+        const input = document.getElementById("editor-text-overlay-input") as HTMLTextAreaElement | null;
+        input?.focus();
+        input?.select();
+      }, 50);
+    },
+    [editor, playback, t.tx_default],
+  );
+  const focusTextField = useCallback(
+    (id: string) => {
+      editor.selectText(id);
+      window.setTimeout(() => document.getElementById("editor-text-overlay-input")?.focus(), 0);
+    },
+    [editor],
+  );
+  const moveText = useCallback(
+    (id: string, x: number, y: number) => {
+      const items = editor.workspace?.text_overlays ?? [];
+      editor.saveTextOverlays(items.map((item) => (item.id === id ? { ...item, x, y } : item)), "text-position");
+    },
+    [editor],
+  );
+
   const deleteAny = useCallback(() => {
     const regions = workspace?.original_regions;
-    if (editor.clipSelection.length) {
+    if (editor.textSelection) {
+      editor.deleteText();
+    } else if (editor.clipSelection.length) {
       editor.deleteClips();
     } else if (editor.selectedRegionId && regions) {
       editor.saveRegions(regions.filter((region) => region.id !== editor.selectedRegionId));
@@ -151,8 +186,8 @@ export default function EditorScreen({
   }, [editor, workspace?.original_regions]);
 
   // ---- keyboard shortcuts ---------------------------------------------------------
-  const keys = useRef({ editor, playback, stepCue, deleteAny, layout, updateLayout, getPlayhead });
-  keys.current = { editor, playback, stepCue, deleteAny, layout, updateLayout, getPlayhead };
+  const keys = useRef({ editor, playback, stepCue, deleteAny, layout, updateLayout, getPlayhead, addText });
+  keys.current = { editor, playback, stepCue, deleteAny, layout, updateLayout, getPlayhead, addText };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const k = keys.current;
@@ -208,6 +243,9 @@ export default function EditorScreen({
       } else if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         k.deleteAny();
+      } else if (key === "t" && !mod) {
+        event.preventDefault();
+        k.addText(k.getPlayhead());
       } else if (key === "m") {
         void k.editor.toggleMute();
       } else if (key === "n") {
@@ -324,6 +362,10 @@ export default function EditorScreen({
           onMoveSubtitle={(position_y) => editor.saveStyle({ position_y })}
           onBlurChange={editor.saveBlur}
           onStepCue={stepCue}
+          textSelectedId={editor.textSelection}
+          onSelectText={editor.selectText}
+          onMoveText={moveText}
+          onEditText={focusTextField}
         />
         <Inspector editor={editor} playback={playback} music={music} getPlayhead={getPlayhead} L={L} />
       </div>
@@ -396,6 +438,13 @@ export default function EditorScreen({
             onSelect: editor.selectClips,
             onChange: editor.saveAudioTracks,
             onDropAsset: (trackId, asset, at) => music.addAsset(asset, at, trackId),
+          }}
+          text={{
+            items: workspace.text_overlays ?? [],
+            selectedId: editor.textSelection,
+            onSelect: editor.selectText,
+            onChange: editor.saveTextOverlays,
+            onAdd: addText,
           }}
         />
       </div>

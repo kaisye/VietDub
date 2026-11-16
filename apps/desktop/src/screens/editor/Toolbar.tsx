@@ -299,6 +299,7 @@ export function ShortcutsHelp({ open, onClose }: { open: boolean; onClose: () =>
         [<><Kbd>S</Kbd> / <Kbd>⌘B</Kbd></>, t.ed_sc_split],
         [<><Kbd>Del</Kbd> / <Kbd>⌫</Kbd></>, t.ed_sc_delete],
         [<Kbd key="m">M</Kbd>, t.ed_sc_mute],
+        [<Kbd key="t">T</Kbd>, t.tx_add],
         [<Kbd key="e">Enter</Kbd>, t.ed_sc_edit_text],
         [<><Kbd>⌘Z</Kbd> / <Kbd>⇧⌘Z</Kbd></>, t.ed_sc_undo],
         [<Kbd key="s">⌘S</Kbd>, t.ed_sc_save],

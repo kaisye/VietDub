@@ -9,6 +9,7 @@ import {
   Lock,
   Magnet,
   Maximize,
+  LetterText,
   Plus,
   Scissors,
   Trash2,
@@ -24,7 +25,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { EditorThumbnails } from "../../../api";
 import { useT } from "../../../i18n";
-import type { EditorAudioTrack, EditorRegion, EditorSegment, EditorSegmentPatch, EditorWorkspace, MusicAsset } from "../../../types";
+import type {
+  EditorAudioTrack,
+  EditorRegion,
+  EditorSegment,
+  EditorSegmentPatch,
+  EditorTextOverlay,
+  EditorWorkspace,
+  MusicAsset,
+} from "../../../types";
 import OriginalTrack, { type Waveform } from "../../EditorOriginalTrack";
 import type { ReviewMarker } from "../useAutoReview";
 import type { SelectMode } from "../useEditor";
@@ -33,6 +42,7 @@ import { ClipLanes, SUB_LANE_H, VOICE_LANE_H } from "./ClipLanes";
 import { AudioTrackHeaders, AudioTrackLanes, type DroppedAsset } from "../music/AudioTracks";
 import type { DuckingCache } from "../music/model";
 import { VideoLane, VIDEO_LANE_H } from "./VideoLane";
+import { TextLane, textLaneHeight } from "../text/TextLane";
 
 export type TrackState = {
   subHidden: boolean;
@@ -44,6 +54,15 @@ export type TrackState = {
 };
 
 export type TimelineApi = { fit: () => void; zoomBy: (factor: number) => void };
+
+/** The text-box lane above the cues (see text/TextLane.tsx). */
+export type TimelineText = {
+  items: EditorTextOverlay[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onChange: (items: EditorTextOverlay[], kind: string) => void;
+  onAdd: (at: number) => void;
+};
 
 /** Music / sound-effect lanes under the built-in tracks (see music/AudioTracks.tsx). */
 export type TimelineMusic = {
@@ -112,6 +131,7 @@ export function Timeline({
   focusRange,
   onMarker,
   music,
+  text,
 }: {
   workspace: EditorWorkspace;
   waveform: Waveform | null;
@@ -156,6 +176,7 @@ export function Timeline({
   focusRange?: { start: number; end: number } | null;
   onMarker?: (cueId: string, time: number) => void;
   music: TimelineMusic;
+  text: TimelineText;
 }) {
   const { t } = useT();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -352,6 +373,8 @@ export function Timeline({
   };
 
   const clipLabels = useMemo(() => ({ voiceSpeed: t.ed_speed, regenerated: t.ed_regenerated }), [t]);
+  // Text boxes stick to cue edges as well as to each other and the playhead.
+  const textSnapTimes = useMemo(() => workspace.segments.flatMap((seg) => [seg.start, seg.end]), [workspace.segments]);
   const selectionCount = selectedIds.size;
   const sliderValue = Math.log(zoom);
 
@@ -419,6 +442,11 @@ export function Timeline({
               {formatTime(time)}
             </div>
             <TrackHeader height={VIDEO_LANE_H} icon={<Film size={14} />} label={t.ed_track_video} />
+            <TrackHeader height={textLaneHeight(text.items)} icon={<LetterText size={14} />} label={t.tx_track}>
+              <HeaderToggle label={t.tx_add_hint} active={false} onClick={() => text.onAdd(getPlayhead())}>
+                <Plus size={13} />
+              </HeaderToggle>
+            </TrackHeader>
             <TrackHeader height={SUB_LANE_H} icon={<Type size={14} />} label={t.ed_track_subtitles}>
               <HeaderToggle
                 label={tracks.subHidden ? t.ed_show_preview : t.ed_hide_preview}
@@ -535,6 +563,20 @@ export function Timeline({
               aspect={(workspace.width || 16) / (workspace.height || 9)}
               title={workspace.title || workspace.job_id}
               onPointerDown={seekLane}
+            />
+            <TextLane
+              items={text.items}
+              duration={duration}
+              zoom={zoom}
+              selectedId={text.selectedId}
+              snapping={snapping}
+              snapTimes={textSnapTimes}
+              getPlayhead={getPlayhead}
+              onGuide={setGuide}
+              onSelect={text.onSelect}
+              onSeek={onSeek}
+              onChange={text.onChange}
+              onAdd={text.onAdd}
             />
             <ClipLanes
               segments={workspace.segments}

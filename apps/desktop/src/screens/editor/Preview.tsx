@@ -1,11 +1,13 @@
 import clsx from "clsx";
-import { ChevronFirst, ChevronLast, Maximize2, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
+import { ChevronFirst, ChevronLast, Headphones, Loader2, Maximize2, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { outputUrl } from "../../api";
+import { getEditorPreviewVideo, outputUrl } from "../../api";
 import { useT } from "../../i18n";
 import type { EditorBlur, EditorSegment, EditorWorkspace } from "../../types";
+import { AUDIO_DELAY_MAX_MS, audioDelayMs, onAudioDelayChange, reportsOutputLatency, setAudioDelayMs } from "./audioDelay";
 import { BlurBox, SubtitlePreview } from "./overlays";
+import { TextOverlayLayer } from "./text/TextOverlayLayer";
 import type { Playback } from "./usePlayback";
 import { formatTimecode } from "./utils";
 
@@ -18,6 +20,10 @@ export function Preview({
   onMoveSubtitle,
   onBlurChange,
   onStepCue,
+  textSelectedId,
+  onSelectText,
+  onMoveText,
+  onEditText,
 }: {
   workspace: EditorWorkspace;
   playback: Playback;
@@ -26,12 +32,17 @@ export function Preview({
   onMoveSubtitle: (positionY: number) => void;
   onBlurChange: (blur: Partial<EditorBlur>) => void;
   onStepCue: (direction: 1 | -1) => void;
+  textSelectedId: string | null;
+  onSelectText: (id: string) => void;
+  onMoveText: (id: string, x: number, y: number) => void;
+  onEditText: (id: string) => void;
 }) {
   const { t } = useT();
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const aspect = (workspace.width || 16) / (workspace.height || 9);
+  const source = usePreviewSource(workspace);
 
   // Fit the frame inside the stage both ways, so the blur box maps 1:1 onto the picture.
   useEffect(() => {
@@ -61,15 +72,29 @@ export function Preview({
         >
           <video
             ref={videoRef}
-            src={outputUrl(workspace.video_url) ?? undefined}
+            src={source ? (outputUrl(source) ?? undefined) : undefined}
             preload="auto"
             {...videoHandlers}
             onClick={togglePlay}
           />
+          {!source ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-black/70 px-6 text-center text-[13px] text-white">
+              <Loader2 size={16} className="shrink-0 animate-spin" />
+              <span>{t.ed_preview_preparing}</span>
+            </div>
+          ) : null}
           <BlurBox blur={workspace.blur} onChange={onBlurChange} hint={t.ed_blur_hint} />
           {showSubtitles ? (
             <SubtitlePreview workspace={workspace} segment={subtitle} time={time} onMove={onMoveSubtitle} />
           ) : null}
+          <TextOverlayLayer
+            workspace={workspace}
+            time={time}
+            selectedId={textSelectedId}
+            onSelect={onSelectText}
+            onMove={onMoveText}
+            onEdit={onEditText}
+          />
           <audio ref={previewRef} preload="none" />
         </div>
         {rate !== 1 ? (
@@ -114,6 +139,7 @@ export function Preview({
           </TransportButton>
         </div>
         <div className="flex items-center justify-end gap-1">
+          <AudioDelayControl />
           <TransportButton
             label={t.ed_fullscreen}
             onClick={() => void frameRef.current?.requestFullscreen?.().catch(() => undefined)}
@@ -122,6 +148,97 @@ export function Preview({
           </TransportButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Asks the backend for a playable source. H.264 sources come back at once; AV1/VP9
+ * ones (which WebKit on M1/M2 Macs cannot decode) wait for a one-time H.264 proxy.
+ */
+function usePreviewSource(workspace: EditorWorkspace): string | null {
+  const [state, setState] = useState({ key: "", url: "" });
+  const key = `${workspace.job_id}:${workspace.video_url}`;
+  useEffect(() => {
+    let cancelled = false;
+    getEditorPreviewVideo(workspace.job_id)
+      .then((data) => !cancelled && setState({ key, url: data.url }))
+      // Fall back to the original: it may still play (e.g. in a browser with AV1 support).
+      .catch(() => !cancelled && setState({ key, url: workspace.video_url }));
+    return () => {
+      cancelled = true;
+    };
+  }, [key, workspace.job_id, workspace.video_url]);
+  return state.key === key ? state.url : null;
+}
+
+/** Manual output-latency compensation for the preview (Bluetooth headphones in WebKit). */
+function AudioDelayControl() {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const [ms, setMs] = useState(audioDelayMs);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => onAudioDelayChange(setMs), []);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        title={t.ed_audio_delay}
+        aria-label={t.ed_audio_delay}
+        onClick={() => setOpen((value) => !value)}
+        className={clsx(
+          "flex h-8 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[11px] font-medium tabular-nums transition-colors hover:bg-[var(--surface-hover)]",
+          ms > 0 ? "text-[var(--primary)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+        )}
+      >
+        <Headphones size={14} />
+        {ms > 0 ? `${ms} ms` : null}
+      </button>
+      {open ? (
+        <div className="absolute bottom-10 right-0 z-30 w-72 rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] shadow-[var(--shadow-float)]">
+          <div className="mb-1 flex items-center justify-between font-semibold text-[var(--text-primary)]">
+            <span>{t.ed_audio_delay}</span>
+            <span className="font-mono tabular-nums text-[var(--primary)]">{ms} ms</span>
+          </div>
+          <p className="mb-2 leading-snug text-[var(--text-secondary)]">
+            {reportsOutputLatency() ? t.ed_audio_delay_auto : t.ed_audio_delay_hint}
+          </p>
+          <input
+            type="range"
+            min={0}
+            max={AUDIO_DELAY_MAX_MS}
+            step={10}
+            value={ms}
+            onChange={(event) => setAudioDelayMs(Number(event.target.value))}
+            className="w-full accent-[var(--primary)]"
+          />
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setAudioDelayMs(200)}
+              className="rounded-[var(--radius-sm)] border border-[var(--border)] px-2 py-1 hover:bg-[var(--surface-hover)]"
+            >
+              {t.ed_audio_delay_bt} · 200 ms
+            </button>
+            <button
+              type="button"
+              onClick={() => setAudioDelayMs(0)}
+              className="rounded-[var(--radius-sm)] px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            >
+              {t.ed_audio_delay_reset}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

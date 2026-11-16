@@ -76,6 +76,7 @@ export function editableState(workspace: EditorWorkspace): EditorEditableState {
     max_lines: workspace.max_lines,
     original_regions: workspace.original_regions,
     audio_tracks: workspace.audio_tracks ?? [],
+    text_overlays: workspace.text_overlays ?? [],
   };
 }
 

@@ -688,6 +688,8 @@ export default function ProgressScreen({
   const isVI = t.nav_create === "Tạo video";
   const out = outputUrl(job.output_url);
   const logsTail = (job.logs ?? "").split("\n").slice(-12).join("\n");
+  // Written by the worker when the platform only served a small stream (see _warn_if_low_resolution).
+  const lowSource = /\[low-source-resolution\] (\d+)x(\d+)/.exec(job.logs ?? "");
 
   // Processing duration from server-persisted timestamps: completed_at - started_at
   // once finished (stable on every revisit), or a live count while still active.
@@ -728,6 +730,14 @@ export default function ProgressScreen({
       </p>
 
       {error ? <div className="banner err" style={{ marginBottom: 16 }}>{error}</div> : null}
+
+      {lowSource ? (
+        <div className="banner warn" style={{ marginTop: 8 }}>
+          {isVI
+            ? `Video gốc chỉ tải được ${lowSource[1]}×${lowSource[2]} — bản lồng tiếng sẽ bị mờ. YouTube giới hạn 360p khi không đăng nhập: bật cookie trình duyệt (AETHER_YTDLP_COOKIES_FROM_BROWSER=chrome) rồi tải lại video.`
+            : `The source only downloaded at ${lowSource[1]}×${lowSource[2]}, so the dub will look blurry. YouTube caps signed-out downloads at 360p: enable browser cookies (AETHER_YTDLP_COOKIES_FROM_BROWSER=chrome) and download again.`}
+        </div>
+      ) : null}
 
       {/* Pipeline flow */}
       <div

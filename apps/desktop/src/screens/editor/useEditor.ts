@@ -25,6 +25,7 @@ import type {
   EditorSegment,
   EditorSegmentPatch,
   EditorStyle,
+  EditorTextOverlay,
   EditorWorkspace,
 } from "../../types";
 import type { Waveform } from "../EditorOriginalTrack";
@@ -50,6 +51,8 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   // Music / sound-effect clips selected on the timeline (exclusive with cues and regions).
   const [clipSelection, setClipSelection] = useState<string[]>([]);
+  // Text box selected on the timeline or the preview (exclusive with cues, regions and clips).
+  const [textSelection, setTextSelection] = useState<string | null>(null);
   const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
   const batchCancel = useRef(false);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
@@ -304,6 +307,7 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
   const selectClips = useCallback((ids: string[], mode: SelectMode = "replace") => {
     void flushRef.current();
     setSelectedRegionId(null);
+    setTextSelection(null);
     setSelection((current) => (current.ids.length ? { ids: [], primary: current.primary } : current));
     setClipSelection((current) => {
       if (mode === "toggle") {
@@ -366,6 +370,48 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
     [clipSelection, saveAudioTracks],
   );
 
+  // ---- text boxes -------------------------------------------------------------
+  // Full-list saves like the audio tracks (a box is a few hundred bytes).
+  const textSeq = useRef(0);
+  const saveTextOverlays = useCallback(
+    (next: EditorTextOverlay[], kind = "text", coalesce = false) => {
+      checkpoint(kind, coalesce);
+      setWorkspace((current) => (current ? { ...current, text_overlays: next } : current));
+      const seq = ++textSeq.current;
+      void track(patchEditorWorkspace(jobId, { text_overlays: next }))
+        .then((data) => {
+          if (seq === textSeq.current) setWorkspace((current) => (current ? { ...current, text_overlays: data.text_overlays } : data));
+        })
+        .catch((e) => {
+          setError(errorText(e));
+          if (seq === textSeq.current) void load();
+        });
+    },
+    [jobId, track, checkpoint, load],
+  );
+
+  const selectText = useCallback((id: string | null) => {
+    void flushRef.current();
+    setTextSelection(id);
+    if (!id) return;
+    setSelectedRegionId(null);
+    setClipSelection([]);
+    setSelection((current) => (current.ids.length ? { ids: [], primary: current.primary } : current));
+  }, []);
+
+  // Drop a text selection that no longer exists (deleted, undone).
+  useEffect(() => {
+    if (!workspace || !textSelection) return;
+    if (!(workspace.text_overlays ?? []).some((item) => item.id === textSelection)) setTextSelection(null);
+  }, [workspace, textSelection]);
+
+  const deleteText = useCallback(() => {
+    const current = workspaceRef.current;
+    if (!current || !textSelection) return;
+    saveTextOverlays((current.text_overlays ?? []).filter((item) => item.id !== textSelection), "delete-text");
+    setTextSelection(null);
+  }, [textSelection, saveTextOverlays]);
+
   // ---- selection ------------------------------------------------------------
   const select = useCallback(
     (seg: EditorSegment, options: { jump?: boolean; mode?: SelectMode } = {}) => {
@@ -374,6 +420,7 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
       void flushRef.current();
       setSelectedRegionId(null);
       setClipSelection([]);
+      setTextSelection(null);
       setSelection((current) => {
         if (mode === "toggle") {
           const has = current.ids.includes(seg.id);
@@ -398,6 +445,7 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
   const selectIds = useCallback((ids: string[]) => {
     void flushRef.current();
     setClipSelection([]);
+    setTextSelection(null);
     setSelection({ ids, primary: ids[ids.length - 1] ?? null });
   }, []);
   const clearSelection = useCallback(() => {
@@ -405,10 +453,12 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
     setSelection({ ids: [], primary: null });
     setSelectedRegionId(null);
     setClipSelection([]);
+    setTextSelection(null);
   }, []);
   const selectRegion = useCallback((id: string | null) => {
     setSelectedRegionId(id);
     if (id) setClipSelection([]);
+    if (id) setTextSelection(null);
     if (id) setSelection((current) => (current.ids.length ? { ids: [], primary: current.primary } : current));
   }, []);
 
@@ -757,6 +807,10 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
     selectClips,
     deleteClips,
     splitClipsAt,
+    saveTextOverlays,
+    textSelection,
+    selectText,
+    deleteText,
     moveSegments,
     retimeVoice,
     addCueAt,

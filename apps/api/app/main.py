@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -21,7 +22,7 @@ import httpx
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session, selectinload
 
-from .database import Base, engine, get_db
+from .database import Base, SessionLocal, engine, get_db
 from .job_runner import create_job, start_mock_job
 from .models import (
     AuditLog,
@@ -1372,21 +1373,40 @@ def apply_video_metadata(job: MediaJob) -> None:
 _METADATA_LOOKUP_DONE: set[str] = set()
 
 
+_METADATA_LOCK = threading.Lock()
+
+
 def hydrate_missing_metadata(db: Session, jobs: list[MediaJob]) -> None:
-    changed = False
-    for job in jobs[:12]:
-        if job.source_title and job.thumbnail_url:
-            continue
-        if job.video_url in _METADATA_LOOKUP_DONE:
-            continue
-        before = (job.source_title, job.thumbnail_url)
-        apply_video_metadata(job)
-        if before != (job.source_title, job.thumbnail_url):
-            changed = True
-        elif job.video_url:
-            _METADATA_LOOKUP_DONE.add(job.video_url)
-    if changed:
-        db.commit()
+    """Fill in missing titles / thumbnails in the background.
+
+    A lookup runs yt-dlp and can take tens of seconds (e.g. Douyin pages it cannot
+    parse), so the project list never waits for it; the next list shows the result.
+    Each URL is tried once per backend run.
+    """
+    with _METADATA_LOCK:
+        pending = [
+            job.id
+            for job in jobs[:12]
+            if job.video_url
+            and not (job.source_title and job.thumbnail_url)
+            and job.video_url not in _METADATA_LOOKUP_DONE
+        ]
+        _METADATA_LOOKUP_DONE.update(job.video_url for job in jobs[:12] if job.id in pending)
+    if pending:
+        threading.Thread(target=_hydrate_metadata_in_background, args=(pending,), daemon=True).start()
+
+
+def _hydrate_metadata_in_background(job_ids: list[str]) -> None:
+    with SessionLocal() as db:
+        for job_id in job_ids:
+            job = db.get(MediaJob, job_id)
+            if not job:
+                continue
+            try:
+                apply_video_metadata(job)
+                db.commit()
+            except Exception:  # Metadata is decoration; a failed lookup must not surface.
+                db.rollback()
 
 
 @app.post("/jobs/{job_id}/run", response_model=MediaJobOut)
@@ -1927,11 +1947,16 @@ def _editor_job(job_id: str, db: Session) -> MediaJob:
 def _editor_workspace(job: MediaJob, rebuild: bool = False) -> dict:
     workspace = None if rebuild else editor.load_workspace(job.id)
     if workspace is None:
+        if job.status not in {MediaJobStatus.ready, MediaJobStatus.failed, MediaJobStatus.cancelled}:
+            # Building now would capture half-written voice takes (e.g. during a voice change).
+            raise HTTPException(status_code=409, detail="Job đang tạo giọng / xử lý — mở trình biên tập sau khi xong.")
         try:
-            workspace = editor.build_workspace(
-                job.id,
-                parse_configuration_json(job.configuration_snapshot_json),
-                job.source_title or "",
+            workspace = editor.apply_carry_over(
+                editor.build_workspace(
+                    job.id,
+                    parse_configuration_json(job.configuration_snapshot_json),
+                    job.source_title or "",
+                )
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1996,6 +2021,7 @@ def patch_editor_workspace(
             else None,
             payload.audio_tracks,
             payload.audio_ops,
+            payload.text_overlays,
         )
         return editor.with_issues(workspace)
 
@@ -2030,6 +2056,20 @@ def get_editor_thumbnails(job_id: str, db: Session = Depends(get_db)) -> dict:
         workspace = _editor_workspace(job)
     try:
         return editor.thumbnails(workspace)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/jobs/{job_id}/editor/preview-video")
+def get_editor_preview_video(job_id: str, db: Session = Depends(get_db)) -> dict:
+    """Playable preview source: the original, or an H.264 proxy for AV1/VP9/… sources."""
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace = _editor_workspace(job)
+    try:
+        return editor.preview_video(workspace)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:

@@ -7,7 +7,7 @@
 
   ; The updater normally exits the app before this hook runs. This handles the
   ; remaining race without /T, which would also terminate this installer.
-  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "VietDub.exe"'
+  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "VietDub Studio.exe"'
   Pop $0
   Pop $1
   Sleep 750

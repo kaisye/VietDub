@@ -311,11 +311,14 @@ else
   # Chi theo doi apps/api/app: neu theo doi ca repo, pip cai .venv-omnivoice
   # (hang nghin file .py) se lam backend reload lien tuc, giet job dang chay
   # va giet luon thread dang cai OmniVoice.
+  # --timeout-graceful-shutdown: editor giu ket noi stream video (keep-alive), neu
+  # khong gioi han thi reload treo mai o "Waiting for connections to close".
   say "1/2: Khoi dong backend FastAPI tai http://127.0.0.1:$PORT (log: backend-dev.log)"
   PYTHONUTF8=1 \
   KMP_DUPLICATE_LIB_OK=TRUE \
   "$PYTHON" -m uvicorn app.main:app \
     --reload --reload-dir apps/api/app --host 127.0.0.1 --port "$PORT" --app-dir apps/api \
+    --timeout-graceful-shutdown 3 \
     >"$LOG" 2>&1 &
   API_PID=$!
 

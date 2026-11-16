@@ -1,5 +1,6 @@
 import { outputUrl } from "../../../api";
 import type { EditorAudioClip, EditorAudioTrack } from "../../../types";
+import { outputLatency } from "../audioDelay";
 import { clipEnvelope, filePosition, type DuckingCache } from "./model";
 
 const LOOKAHEAD = 12; // seconds of upcoming music clips decoded ahead of the playhead
@@ -54,9 +55,7 @@ export class MusicPlayer {
   }
 
   heardTime(t: number): number {
-    const ctx = this.ctx as (AudioContext & { outputLatency?: number }) | null;
-    const latency = ctx ? Math.min(0.5, (ctx.baseLatency || 0) + (ctx.outputLatency || 0)) : 0;
-    return t + latency * this.rate;
+    return t + outputLatency(this.ctx) * this.rate;
   }
 
   sync(input: MusicSyncInput, t: number, isPlaying: boolean): void {

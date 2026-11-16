@@ -977,6 +977,23 @@ select:disabled {
 .editor-sub-preview.dragging {
   outline: 1px dashed rgba(255, 255, 255, 0.8);
 }
+.editor-text-box {
+  position: absolute;
+  z-index: 3;
+  white-space: pre;
+  /* libass stacks lines about this tight; the per-line boxes overlap the same way. */
+  line-height: 1.2;
+  cursor: move;
+  touch-action: none;
+}
+.editor-text-box:hover,
+.editor-text-box.selected {
+  outline: 1px dashed rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+.editor-text-box.selected {
+  outline: 1.5px solid var(--primary);
+}
 
 .editor-hint {
   font-size: 12px;

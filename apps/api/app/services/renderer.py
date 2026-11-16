@@ -71,8 +71,12 @@ def render_video(
     max_lines: int = 2,
     output_filename: str | None = None,
     music_audio_path: Path | None = None,
+    text_overlays: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Render a real MP4 output with the generated voice and subtitles.
+
+    ``text_overlays`` (editor text boxes, see services/text_overlays) are drawn on top of
+    the subtitles; without them the command is unchanged.
 
     ``music_audio_path`` (editor audio tracks, already ducked and timed) is added on top
     of the usual voice / original-audio mix; without it the command is unchanged.
@@ -121,13 +125,15 @@ def render_video(
         configured_subtitle_style,
         aspect_ratio,
         max_lines=max_lines,
+        text_overlays=text_overlays,
     )
     if video_filter:
         command.extend(["-vf", video_filter])
     command.extend(video_encoding_args)
     command.extend(["-c:a", "aac", "-b:a", audio_bitrate, "-t", f"{video_duration:.3f}", str(output)])
 
-    result = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    # Long videos (and upscaled low-res sources) can need more than ten minutes.
+    result = subprocess.run(command, capture_output=True, text=True, timeout=max(600, int(video_duration * 3)))
     if result.returncode == 0 and output.exists() and output.stat().st_size > 0:
         return output
 
@@ -1240,10 +1246,17 @@ def _video_filter(
     subtitle_style: dict[str, Any] | None,
     aspect_ratio: str,
     max_lines: int = 2,
+    text_overlays: list[dict[str, Any]] | None = None,
 ) -> str:
     ratio_filter = _aspect_ratio_filter(video_path, aspect_ratio)
     configured = normalize_subtitle_style(subtitle_style)
     target_dimensions = _target_dimensions(video_path, aspect_ratio)
+    if subtitle_path is not None or text_overlays:
+        # Burn text on an upscaled frame so a 360p/480p source still gets crisp letters.
+        upscaled = _subtitle_canvas(target_dimensions)
+        if upscaled != target_dimensions:
+            target_dimensions = upscaled
+            ratio_filter = ",".join(filter(None, (ratio_filter, f"scale={upscaled[0]}:{upscaled[1]}:flags=lanczos")))
     blur_filter = _hard_sub_blur_filter(configured, target_dimensions)
     subtitle_filter = ""
     if subtitle_path is not None:
@@ -1253,6 +1266,8 @@ def _video_filter(
             target_dimensions,
             max_lines=max_lines,
         )
+    overlay_filter = _text_overlay_filter(text_overlays, target_dimensions, configured)
+    subtitle_filter = ",".join(filter(None, (subtitle_filter, overlay_filter)))
     prefix = f"{ratio_filter}," if ratio_filter else ""
     if blur_filter:
         output_chain = blur_filter
@@ -1260,6 +1275,21 @@ def _video_filter(
             output_chain = f"{output_chain},{subtitle_filter}"
         return f"{prefix}{output_chain}"
     return ",".join(filter(None, (ratio_filter, subtitle_filter)))
+
+
+def _text_overlay_filter(
+    overlays: list[dict[str, Any]] | None, size: tuple[int, int], configured: dict[str, Any]
+) -> str:
+    if not overlays:
+        return ""
+    from .text_overlays import write_overlays_ass
+
+    path = ensure_storage() / "subtitles" / f"overlays-{uuid.uuid4().hex[:10]}.ass"
+    ass_path = write_overlays_ass(overlays, size, path, default_font=str(configured.get("font_name") or "Arial"))
+    if not ass_path:
+        return ""
+    normalized = ass_path.resolve().as_posix().replace(":", r"\:").replace("'", r"\\'")
+    return f"ass='{normalized}'"
 
 
 def _hard_sub_blur_filter(configured: dict[str, Any], video_size: tuple[int, int]) -> str:
@@ -1329,6 +1359,19 @@ def _aspect_ratio_filter(video_path: Path, aspect_ratio: str) -> str:
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height}"
     )
+
+
+# Short side of the frame burned-in subtitles are drawn on; smaller sources are upscaled.
+SUBTITLE_MIN_SHORT_SIDE = 1080
+
+
+def _subtitle_canvas(size: tuple[int, int]) -> tuple[int, int]:
+    width, height = size
+    short = min(width, height)
+    if short <= 0 or short >= SUBTITLE_MIN_SHORT_SIDE:
+        return size
+    scale = SUBTITLE_MIN_SHORT_SIDE / short
+    return round(width * scale / 2) * 2, round(height * scale / 2) * 2
 
 
 def _target_dimensions(video_path: Path, aspect_ratio: str) -> tuple[int, int]:

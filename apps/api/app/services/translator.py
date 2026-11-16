@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 import difflib
 import json
@@ -7,6 +8,7 @@ import logging
 import math
 import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from typing import Any
 import httpx
 
 from .caption_text import remove_non_speech_tags
+from .progress import report_progress
 from .renderer import source_language_subtitle_path
 from .runtime_settings import get_runtime_settings
 from .speech_rate import SpeechRateProfile, speech_rate_translation_hint
@@ -1314,6 +1317,11 @@ def _openrouter_post(model: str, messages: list[dict[str, str]], max_tokens: int
         body["reasoning"] = {"enabled": True, "exclude": True}
     else:
         body["reasoning"] = {"enabled": False}
+    # Optional backup models (comma-separated): OpenRouter moves on to the next one when
+    # the first is rate-limited or down, within the same request.
+    fallbacks = openrouter_fallback_models(model)
+    if fallbacks:
+        body["models"] = [model, *fallbacks]
     return httpx.post(
         OPENROUTER_CHAT_URL,
         headers={
@@ -1328,7 +1336,7 @@ def _openrouter_post(model: str, messages: list[dict[str, str]], max_tokens: int
     )
 
 
-def _openrouter_error_message(model: str, response: httpx.Response) -> str:
+def _openrouter_error_message(model: str, response: httpx.Response, retried: bool = False) -> str:
     detail = _router_error_detail(response)
     if response.status_code == 401:
         return f"OpenRouter từ chối API key (HTTP 401): {detail}. Kiểm tra lại key trong Cài đặt > Dịch."
@@ -1337,29 +1345,110 @@ def _openrouter_error_message(model: str, response: httpx.Response) -> str:
     if response.status_code == 404:
         return f"OpenRouter không tìm thấy model '{model}': {detail}. Kiểm tra tên model trong Cài đặt > Dịch."
     if response.status_code == 429:
-        return f"OpenRouter đang giới hạn tốc độ (HTTP 429): {detail}. Đợi một lát rồi Thử lại."
+        after = " sau nhiều lần tự thử lại" if retried else ""
+        return (
+            f"OpenRouter đang giới hạn tốc độ{after} (HTTP 429): {detail}. Đợi vài phút rồi Thử lại, "
+            "hoặc đổi model trong Cài đặt > Dịch."
+        )
     return f"OpenRouter lỗi HTTP {response.status_code} với model '{model}': {detail}"
 
 
-def _request_openrouter_completion(model: str, system_prompt: str, user_prompt: str) -> str:
+# Rate limits ("Provider returned error" 429 from the upstream host) and gateway errors
+# usually clear within seconds, so a long job waits instead of failing on the first one.
+OPENROUTER_RETRY_STATUSES = {429, 502, 503}
+OPENROUTER_RETRY_DELAYS = (3.0, 8.0, 20.0, 45.0)
+
+
+# Which model answered each OpenRouter call of the current job step (see track_openrouter_models).
+_served_models: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
+    "aether_openrouter_served_models", default=None
+)
+
+
+def openrouter_fallback_models(model: str | None = None) -> list[str]:
+    model = model or _openrouter_model()
+    return [
+        name.strip()
+        for name in os.getenv("AETHER_OPENROUTER_FALLBACK_MODELS", "").split(",")
+        if name.strip() and name.strip() != model
+    ]
+
+
+def track_openrouter_models() -> dict[str, int]:
+    """Starts counting, for this thread's job step, how many calls each model answered."""
+    counts: dict[str, int] = {}
+    _served_models.set(counts)
+    return counts
+
+
+def _served_label(requested: str, served: str) -> str:
+    """The configured model a served id belongs to (OpenRouter may add a version suffix)."""
+    for name in [requested, *openrouter_fallback_models(requested)]:
+        if served == name or served.startswith(f"{name}-") or name.startswith(served):
+            return name
+    return served
+
+
+def _record_served_model(requested: str, payload: dict) -> None:
+    served = _served_label(requested, str(payload.get("model") or requested))
+    counts = _served_models.get()
+    if counts is not None:
+        counts[served] = counts.get(served, 0) + 1
+    if served != requested:
+        logger.info("OpenRouter answered with fallback model %s instead of %s.", served, requested)
+        report_progress(f"Model chính đang bận — đoạn này được dịch bằng model dự phòng {served}")
+
+
+def _openrouter_retry_delay(response: httpx.Response, attempt: int) -> float:
     try:
-        response = _openrouter_post(
-            model,
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=_optional_positive_int("AETHER_TRANSLATION_MAX_TOKENS") or 8192,
-            timeout=_optional_positive_int("AETHER_TRANSLATION_TIMEOUT_SECONDS") or 600,
+        wait = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        wait = OPENROUTER_RETRY_DELAYS[attempt]
+    return min(90.0, max(1.0, wait))
+
+
+def _request_openrouter_completion(model: str, system_prompt: str, user_prompt: str) -> str:
+    for attempt in range(len(OPENROUTER_RETRY_DELAYS) + 1):
+        try:
+            response = _openrouter_post(
+                model,
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=_optional_positive_int("AETHER_TRANSLATION_MAX_TOKENS") or 8192,
+                timeout=_optional_positive_int("AETHER_TRANSLATION_TIMEOUT_SECONDS") or 600,
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+            raise RuntimeError(f"Không kết nối được OpenRouter (openrouter.ai): {exc}. Kiểm tra mạng rồi Thử lại.") from exc
+        if response.status_code not in OPENROUTER_RETRY_STATUSES or attempt == len(OPENROUTER_RETRY_DELAYS):
+            break
+        delay = _openrouter_retry_delay(response, attempt)
+        logger.warning(
+            "OpenRouter HTTP %s for %s (%s); retry %d/%d in %.0fs.",
+            response.status_code, model, _router_error_detail(response), attempt + 1, len(OPENROUTER_RETRY_DELAYS), delay,
         )
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
-        raise RuntimeError(f"Không kết nối được OpenRouter (openrouter.ai): {exc}. Kiểm tra mạng rồi Thử lại.") from exc
+        time.sleep(delay)
     if not response.is_success:
-        raise RuntimeError(_openrouter_error_message(model, response))
+        raise RuntimeError(_openrouter_error_message(model, response, retried=attempt > 0))
     payload = response.json()
     if isinstance(payload, dict) and payload.get("error"):
         raise RuntimeError(f"OpenRouter trả lỗi cho model '{model}': {_router_error_detail(response)}")
+    if isinstance(payload, dict):
+        _record_served_model(model, payload)
     return _extract_chat_completion_content(payload)
+
+
+def translation_models_summary(counts: dict[str, int]) -> str:
+    """Job-log line: calls per model, the backup ones marked; empty when nothing was called."""
+    if not counts:
+        return ""
+    primary = _openrouter_model()
+    parts = [
+        f"{count} lượt {name}" + (" (dự phòng)" if name != primary else "")
+        for name, count in sorted(counts.items(), key=lambda item: (item[0] != primary, -item[1]))
+    ]
+    return "Dịch bằng OpenRouter: " + ", ".join(parts) + "."
 
 
 def openrouter_status() -> dict[str, object]:

@@ -5,6 +5,7 @@ import type {
   EditorBlur,
   EditorRegion,
   EditorAudioTrack,
+  EditorTextOverlay,
   MusicAsset,
   MusicCredits,
   OnlineTrack,
@@ -35,7 +36,7 @@ import type {
 // bundle), fall back to the absolute localhost address.
 export const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
-  (import.meta.env.DEV ? "" : "http://127.0.0.1:18386");
+  (import.meta.env.DEV ? "" : "http://127.0.0.1:18387");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -296,6 +297,7 @@ export const patchEditorWorkspace = (
     max_lines?: number;
     original_regions?: EditorRegion[];
     audio_tracks?: EditorAudioTrack[];
+    text_overlays?: EditorTextOverlay[];
   },
 ) =>
   request<EditorWorkspace>(`/jobs/${id}/editor`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -328,6 +330,10 @@ export type EditorThumbnails = { url: string; count: number; interval: number; w
 /** Filmstrip sprite for the timeline video track: `count` frames of width×height, one every `interval` s. */
 export const getEditorThumbnails = (id: string) => request<EditorThumbnails>(`/jobs/${id}/editor/thumbnails`);
 
+/** Source the preview can play: the original, or an H.264 proxy (built on first call) for AV1/VP9 videos. */
+export const getEditorPreviewVideo = (id: string) =>
+  request<{ url: string; proxy: boolean; codec: string }>(`/jobs/${id}/editor/preview-video`);
+
 export const mergeEditorSegmentWithNext = (id: string, segmentId: string) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/merge-next`, { method: "POST" });
 
@@ -336,7 +342,7 @@ export const swapEditorSegmentAudio = (id: string, segmentId: string) =>
 
 export type EditorEditableState = Pick<
   EditorWorkspace,
-  "segments" | "blur" | "audio" | "style" | "max_lines" | "original_regions" | "audio_tracks"
+  "segments" | "blur" | "audio" | "style" | "max_lines" | "original_regions" | "audio_tracks" | "text_overlays"
 >;
 
 export const putEditorState = (id: string, state: EditorEditableState) =>

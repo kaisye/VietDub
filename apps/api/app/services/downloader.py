@@ -305,6 +305,9 @@ def _download_with_ytdlp(
     output_template = str(root / "raw-videos" / f"{job_id}.%(ext)s")
     base_options = {
         "merge_output_format": "mp4",
+        # At equal resolution prefer H.264/AAC over AV1/VP9: WebKit on M1/M2 Macs cannot
+        # decode AV1, so the editor preview would not play.
+        "format_sort": ["res", "vcodec:h264", "acodec:aac"],
         "noplaylist": True,
         "outtmpl": output_template,
         "quiet": True,

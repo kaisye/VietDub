@@ -217,6 +217,8 @@ class EditorStateRequest(BaseModel):
     original_regions: list[EditorRegion]
     # Music / sound-effect tracks; absent in snapshots from editors without them.
     audio_tracks: list[dict[str, Any]] | None = None
+    # Text boxes; likewise absent in older snapshots.
+    text_overlays: list[dict[str, Any]] | None = None
 
 
 class EditorInsertRequest(BaseModel):
@@ -247,6 +249,8 @@ class EditorPatchRequest(BaseModel):
     # …or granular edits: {op: add_track|update_track|delete_track|add_clip|update_clip|
     # delete_clip|move_clip, …} (see services/music_mix.apply_ops).
     audio_ops: list[dict[str, Any]] | None = Field(default=None, max_length=500)
+    # Full replacement list of text boxes (normalized server-side, see services/text_overlays).
+    text_overlays: list[dict[str, Any]] | None = Field(default=None, max_length=100)
 
 
 class MediaJobVoiceRerenderRequest(BaseModel):

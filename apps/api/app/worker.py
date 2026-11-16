@@ -18,6 +18,7 @@ from .services import editor
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
 from .services.renderer import (
+    _probe_dimensions,
     prepare_display_subtitle,
     render_video,
     source_language_subtitle_path,
@@ -46,9 +47,11 @@ from .services.subtitle import (
 from .services.translator import (
     _has_untranslated_cjk,
     normalize_subtitle_for_translation,
+    track_openrouter_models,
     translate_subtitle,
     translated_segments_path,
     translation_limit_label,
+    translation_models_summary,
 )
 from .services.progress import bind_job, clear_progress, report_progress
 from .services.tts import VoiceOverrides, generate_tts, tts_provider_override
@@ -249,6 +252,9 @@ def rerender_job_with_voice(
     raw_video_path = Path(str(checkpoint["raw_video_path"]))
     translated_subtitle_path = Path(str(checkpoint["subtitle_path"]))
     output_filename = f"{raw_video_path.stem}-voice-{uuid.uuid4().hex[:8]}.mp4"
+    # The editor workspace points at the old takes: rebuild it from the new voice (edits kept as a draft).
+    if editor.retire_for_new_voice(job.id, voice.name):
+        job.logs = append_log(job.logs, "Editor workspace saved as a draft; it is rebuilt from the new voice.")
 
     job.status = MediaJobStatus.tts_generating
     job.progress = 70
@@ -467,10 +473,37 @@ def _run_pipeline(job_id: str) -> None:
                 f"Test mode: source limited to the first {clip_seconds}s for a quick quality preview.",
             )
             _persist_job_log(job)
+        _warn_if_low_resolution(job, raw_video_path)
         _raise_if_cancelled(job.id)
         _log_artifact(job, raw_video_path)
 
         _continue_after_download(db, job, raw_video_path, configuration)
+
+
+# Below this the dub looks blurry full-screen. The marker is parsed by the Progress screen.
+LOW_RESOLUTION_HEIGHT = 720
+LOW_RESOLUTION_MARKER = "[low-source-resolution]"
+
+
+def _warn_if_low_resolution(job: MediaJob, raw_video_path: Path) -> None:
+    """Logs a warning when a downloaded (not uploaded) source came back below 720p.
+
+    YouTube serves at most 360p to signed-out clients unless cookies are configured,
+    so a "best" download can silently end up tiny.
+    """
+    if not str(job.video_url or "").startswith(("http://", "https://")):
+        return
+    try:
+        width, height = _probe_dimensions(raw_video_path)
+    except Exception:
+        return
+    if 0 < min(width, height) < LOW_RESOLUTION_HEIGHT:
+        job.logs = append_log(
+            job.logs,
+            f"WARNING {LOW_RESOLUTION_MARKER} {width}x{height}: the platform only served a low-resolution "
+            "stream. For YouTube set AETHER_YTDLP_COOKIES_FROM_BROWSER (e.g. chrome) and download again.",
+        )
+        _persist_job_log(job)
 
 
 def _continue_after_download(
@@ -697,6 +730,7 @@ def _continue_after_source(
         job.logs = append_log(job.logs, limit_label)
         _persist_job_log(job)
         db.commit()
+    served_models = track_openrouter_models()
     translated_subtitle_path = translate_subtitle(
         subtitle_path,
         configuration.languages.target if configuration else job.target_language,
@@ -708,6 +742,10 @@ def _continue_after_source(
         else None,
     )
     _raise_if_cancelled(job.id)
+    models_line = translation_models_summary(served_models)
+    if models_line:
+        job.logs = append_log(job.logs, models_line)
+        _persist_job_log(job)
     _log_artifact(job, translated_subtitle_path)
     segments_path = translated_segments_path(translated_subtitle_path)
     if segments_path.exists():

@@ -58,7 +58,7 @@ LOOPBACK_HOST = {"youtube": "127.0.0.1", "tiktok": "127.0.0.1", "facebook": "loc
 def default_redirect_base(request_base_url: str | None = None, platform: str | None = None) -> str:
     """Loopback base the browser can reach. 127.0.0.1 for Google/TikTok (both recommend
     the IP literal over ``localhost``), ``localhost`` for Facebook; port taken from the
-    incoming request or ``AETHER_API_PORT`` (desktop sidecar: 8386 dev / 18386 packaged)."""
+    incoming request or ``AETHER_API_PORT`` (desktop sidecar: 8386 dev / 18387 packaged)."""
     port = None
     if request_base_url:
         port = urlsplit(request_base_url).port

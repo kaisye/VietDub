@@ -11,7 +11,7 @@ import { clipEnd, formatDuration, MIN_CLIP, round3 } from "./model";
 import type { AudioTracksController } from "./useAudioTracks";
 
 /** Seconds field that commits on blur / Enter (one undo step per commit). */
-function SecondsField({ label, value, onCommit, min = 0 }: { label: string; value: number; onCommit: (v: number) => void; min?: number }) {
+export function SecondsField({ label, value, onCommit, min = 0 }: { label: string; value: number; onCommit: (v: number) => void; min?: number }) {
   const [text, setText] = useState(value.toFixed(2));
   useEffect(() => setText(value.toFixed(2)), [value]);
   const commit = () => {

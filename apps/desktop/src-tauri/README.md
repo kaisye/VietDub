@@ -35,13 +35,13 @@ The backend child process is terminated when the window closes.
 
 - `AETHER_DESKTOP_SKIP_BACKEND=1` — do not start the backend (run it yourself).
 - `AETHER_PYTHON` — Python executable for the dev backend (default `python`).
-- `AETHER_API_PORT` — backend port (dev default `8386`, packaged default `18386`).
+- `AETHER_API_PORT` — backend port (dev default `8386`, packaged default `18387`).
 - `AETHER_DATA_DIR` — writable dir for the SQLite db + media storage. In a
   packaged build the shell sets this to the OS app-local-data dir automatically;
   unset in dev (uses the repo-relative `storage/` + `aether_studio.db`).
 
 Frontend → backend base URL is `VITE_API_BASE_URL` (dev requests use the Vite
-proxy to `8386`; packaged builds use `http://127.0.0.1:18386`).
+proxy to `8386`; packaged builds use `http://127.0.0.1:18387`).
 
 ## Production packaging
 

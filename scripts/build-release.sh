@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "VietDub macOS release must be built on Apple Silicon." >&2
+  echo "VietDub Studio macOS release must be built on Apple Silicon." >&2
   exit 1
 fi
 
@@ -75,8 +75,10 @@ cp build/backend/dist/videodubbing-api \
   apps/desktop/src-tauri/binaries/videodubbing-api-aarch64-apple-darwin
 chmod +x apps/desktop/src-tauri/binaries/videodubbing-api-aarch64-apple-darwin
 
+# `app` too: the updater artifact (.app.tar.gz + .sig) is made from the .app bundle.
+# Signing needs TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) from ~/.tauri/vietdub-studio-updater.key.
 npm --workspace apps/desktop run tauri build -- \
-  --target aarch64-apple-darwin --bundles dmg
+  --target aarch64-apple-darwin --bundles app,dmg
 
 BUNDLE="$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)"
 if [[ -z "$BUNDLE" ]]; then
@@ -85,7 +87,7 @@ if [[ -z "$BUNDLE" ]]; then
 fi
 
 mkdir -p release
-ARTIFACT="release/VietDub-${VERSION}-macos-arm64.dmg"
+ARTIFACT="release/VietDubStudio-${VERSION}-macos-arm64.dmg"
 cp "$BUNDLE" "$ARTIFACT"
 shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256"
 echo "Release ready: $ARTIFACT"

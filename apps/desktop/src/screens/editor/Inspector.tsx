@@ -18,6 +18,7 @@ import { InfoRow, Kbd, PanelSection, RangeField, TimeField } from "./controls";
 import type { EditorController } from "./useEditor";
 import type { Playback } from "./usePlayback";
 import { ClipInspector, MultiClipInspector } from "./music/ClipInspector";
+import { TextInspector } from "./text/TextInspector";
 import type { AudioTracksController } from "./music/useAudioTracks";
 import { formatTime, ISSUE_LABEL, round3, type Translate } from "./utils";
 
@@ -40,7 +41,10 @@ export function Inspector({
   const region = workspace.original_regions.find((item) => item.id === editor.selectedRegionId) ?? null;
   let body: React.ReactNode;
   let heading: string;
-  if (editor.clipSelection.length === 1) {
+  if (editor.textSelection) {
+    heading = t.tx_inspector;
+    body = <TextInspector editor={editor} />;
+  } else if (editor.clipSelection.length === 1) {
     heading = t.mu_inspector_clip;
     body = <ClipInspector editor={editor} playback={playback} music={music} getPlayhead={getPlayhead} />;
   } else if (editor.clipSelection.length > 1) {

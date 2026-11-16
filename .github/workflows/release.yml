@@ -1,4 +1,4 @@
-name: Build VietDub installers
+name: Build VietDub Studio installers
 
 on:
   workflow_dispatch:
@@ -6,8 +6,10 @@ on:
     tags:
       - "v*"
 
-# tauri-action creates/updates a GitHub Release and uploads the signed
-# installers plus latest.json (the auto-updater manifest).
+# tauri-action creates/updates a GitHub Release in kaisye/vietdub-studio-app and uploads
+# the signed installers plus latest.json (the auto-updater manifest).
+# Never point this at kaisye/VietDubPublic: that is the classic VietDub's update
+# channel, and its users must not be moved onto VietDub Studio.
 permissions:
   contents: write
 
@@ -33,10 +35,10 @@ jobs:
       - name: Verify release credentials
         shell: bash
         env:
-          VIETDUB_PUBLIC_RELEASE_TOKEN: ${{ secrets.VIETDUB_PUBLIC_RELEASE_TOKEN }}
+          VIETDUB_STUDIO_RELEASE_TOKEN: ${{ secrets.VIETDUB_STUDIO_RELEASE_TOKEN }}
         run: |
-          if [ -z "$VIETDUB_PUBLIC_RELEASE_TOKEN" ]; then
-            echo "::error::Missing VIETDUB_PUBLIC_RELEASE_TOKEN. Add a fine-grained PAT for kaisye/VietDubPublic with Contents: Read and write."
+          if [ -z "$VIETDUB_STUDIO_RELEASE_TOKEN" ]; then
+            echo "::error::Missing VIETDUB_STUDIO_RELEASE_TOKEN. Add a fine-grained PAT for kaisye/vietdub-studio-app with Contents: Read and write."
             exit 1
           fi
           # A present-but-expired PAT used to get all the way to the publish step
@@ -46,11 +48,11 @@ jobs:
           # token even on a public repository, so a 200 here means it is valid --
           # it does not prove the token still carries Contents: write.
           status=$(curl -sS -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer $VIETDUB_PUBLIC_RELEASE_TOKEN" \
+            -H "Authorization: Bearer $VIETDUB_STUDIO_RELEASE_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/kaisye/VietDubPublic)
+            https://api.github.com/repos/kaisye/vietdub-studio-app)
           if [ "$status" != "200" ]; then
-            echo "::error::VIETDUB_PUBLIC_RELEASE_TOKEN was rejected by the GitHub API (HTTP $status). The fine-grained PAT has most likely expired -- regenerate it for kaisye/VietDubPublic with Contents: Read and write, then update the repository secret."
+            echo "::error::VIETDUB_STUDIO_RELEASE_TOKEN was rejected by the GitHub API (HTTP $status). The fine-grained PAT has most likely expired -- regenerate it for kaisye/vietdub-studio-app with Contents: Read and write, then update the repository secret."
             exit 1
           fi
           echo "Release token accepted by the GitHub API."
@@ -134,19 +136,21 @@ jobs:
         env:
           # Updater signing — store these as repository secrets. Without them the
           # build still produces installers but cannot emit signed update artifacts.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Fine-grained PAT scoped only to kaisye/VietDubPublic with
+          # VietDub Studio has its own key (~/.tauri/vietdub-studio-updater.key); the
+          # TAURI_SIGNING_* secrets belong to the classic VietDub.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.VIETDUB_STUDIO_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.VIETDUB_STUDIO_SIGNING_KEY_PASSWORD }}
+          # Fine-grained PAT scoped only to kaisye/vietdub-studio-app with
           # Contents: Read and write. The default GITHUB_TOKEN cannot publish
           # into a different repository.
-          GITHUB_TOKEN: ${{ secrets.VIETDUB_PUBLIC_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.VIETDUB_STUDIO_RELEASE_TOKEN }}
         with:
           projectPath: apps/desktop
           owner: kaisye
-          repo: VietDubPublic
+          repo: vietdub-studio-app
           releaseCommitish: main
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
-          releaseName: "VietDub v__VERSION__"
+          releaseName: "VietDub Studio v__VERSION__"
           releaseDraft: false
           prerelease: false
           # Tauri's DMG helper occasionally fails on hosted macOS runners while
@@ -159,7 +163,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          APP_PATH="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/VietDub.app"
+          APP_PATH="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/VietDub Studio.app"
           SIDECAR_PATH="$APP_PATH/Contents/MacOS/videodubbing-api"
           test -d "$APP_PATH"
           codesign --verify --deep --strict --verbose=4 "$APP_PATH"

@@ -371,11 +371,35 @@ export type EditorWorkspace = {
   original_regions: EditorRegion[];
   /** Music / sound-effect tracks (always present in API answers; [] for older workspaces). */
   audio_tracks: EditorAudioTrack[];
+  /** Text boxes drawn on the video (always present in API answers; [] for older workspaces). */
+  text_overlays: EditorTextOverlay[];
   /** Derived server-side from style; never sent back. */
   subtitle: EditorSubtitleLayout;
   segments: EditorSegment[];
   render: { status: "idle" | "running" | "done" | "failed"; output_url?: string; error?: string };
   updated_at: string;
+};
+
+/**
+ * Text box on the video for [start, end). (x, y) are fractions of the frame; `align` says which
+ * point of the box sits there (left edge, centre, right edge; always vertically centred).
+ * `size` is the font size as a fraction of the frame height. See services/text_overlays.py.
+ */
+export type EditorTextOverlay = {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  bg_color: string;
+  bg_opacity: number;
+  bold: boolean;
+  align: "left" | "center" | "right";
+  /** Empty: the subtitle font. */
+  font_name: string;
 };
 
 // ── Editor audio tracks & music library ──

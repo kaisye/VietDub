@@ -92,10 +92,11 @@ fn spawn_backend(app: &AppHandle) -> Option<Child> {
     // Keep packaged VietDub isolated from the source-development API. Otherwise
     // a locally running VideoDubbing backend on 8386 can serve its database and
     // secrets to the packaged WebView before VietDub's own sidecar starts.
+    // 18387, not the classic VietDub's 18386: both apps can be installed side by side.
     let default_port = if cfg!(debug_assertions) {
         "8386"
     } else {
-        "18386"
+        "18387"
     };
     let port = std::env::var("AETHER_API_PORT").unwrap_or_else(|_| default_port.to_string());
 

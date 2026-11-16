@@ -89,6 +89,28 @@ def test_thumbnails_build_a_cached_sprite(job_storage) -> None:  # noqa: F811
     assert sprite.read_bytes() == b"cached"
 
 
+def test_preview_video_passes_h264_through_and_proxies_other_codecs(job_storage) -> None:  # noqa: F811
+    import subprocess
+
+    job, config = job_storage
+    workspace = editor.build_workspace(job, config)
+    assert editor.preview_video(workspace) == {"url": workspace["video_url"], "proxy": False, "codec": "h264"}
+
+    # Same file name, different codec (MPEG-4 Part 2 stands in for AV1/VP9: not in the playable set).
+    source = editor._path_from_storage_url(workspace["video_url"])
+    other = source.with_suffix(".tmp.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-c:v", "mpeg4", str(other)], check=True)
+    other.replace(source)
+
+    data = editor.preview_video(workspace)
+    proxy = editor.workspace_dir(job) / "preview.mp4"
+    assert data == {"url": f"/storage/editor/{job}/preview.mp4", "proxy": True, "codec": "mpeg4"}
+    assert editor._stream_codecs(proxy)[0] == "h264"
+    mtime = proxy.stat().st_mtime
+    assert editor.preview_video(workspace) == data and proxy.stat().st_mtime == mtime  # Cached.
+    assert not list(editor.workspace_dir(job).glob("preview.*.tmp.mp4"))  # Temp file renamed into place.
+
+
 @pytest.fixture
 def client(job_storage):  # noqa: F811
     from app.main import app
