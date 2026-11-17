@@ -116,7 +116,7 @@ def test_start_requires_credentials(channels_env):
         ("youtube", "accounts.google.com", {"client_id": "cid-123", "code_challenge_method": "S256",
                                             "access_type": "offline", "response_type": "code"}),
         ("facebook", "www.facebook.com", {"client_id": "cid-123", "response_type": "code",
-                                          "scope": "pages_show_list,pages_read_engagement,read_insights"}),
+                                          "scope": "pages_show_list,pages_read_engagement,read_insights,pages_manage_posts"}),
         ("tiktok", "www.tiktok.com", {"client_key": "cid-123", "response_type": "code", "code_challenge_method": "S256",
                                       "scope": "user.info.basic,user.info.profile,user.info.stats,video.list"}),
     ],

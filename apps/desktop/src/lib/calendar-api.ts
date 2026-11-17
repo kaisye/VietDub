@@ -27,6 +27,11 @@ export type CalendarPost = {
   } | null;
   media_job_id: string | null;
   media_job: { id: string; title: string; thumbnail_url: string | null; status: string } | null;
+  /** Publish automatically at scheduled_at (Facebook Pages). */
+  auto_publish: boolean;
+  publish_state: "" | "pending" | "uploading" | "remote_scheduled" | "published" | "failed";
+  publish_error: string;
+  remote_id: string;
   /** A video file on this machine ("" = none). Only the path is stored. */
   video_path: string;
   video_file: { path: string; name: string; exists: boolean; size: number | null } | null;
@@ -60,6 +65,7 @@ export type PostInput = {
   channel_id?: string | null;
   media_job_id?: string | null;
   video_path?: string;
+  auto_publish?: boolean;
   scheduled_at?: string | null;
   status?: PostStatus;
   published_url?: string;

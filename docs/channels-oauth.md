@@ -118,7 +118,9 @@ Review / limits:
      *Enforce HTTPS* on (default) a Live app needs an **https** redirect —
      use the redirect-base-URL tunnel workaround above.
 4. Permissions requested: `pages_show_list`, `pages_read_engagement`,
-   `read_insights`. In Development mode they work for app admins/developers/
+   `read_insights`, `pages_manage_posts` (auto-publishing calendar posts). They belong to
+   the **"Manage everything on your Page"** use case: add that use case to the app, then
+   *Customize → Permissions → Add* each of them (otherwise Meta answers "Invalid Scopes"). In Development mode they work for app admins/developers/
    testers without review. To let other people connect, the app needs
    **Business verification** + **App Review** (Advanced Access) for these
    permissions.
@@ -139,6 +141,17 @@ After ~60 days without reconnecting, the user token expires and the channel show
 Graph version can be changed with `AETHER_FACEBOOK_GRAPH_VERSION`; if Meta ever
 rejects the PKCE parameters for your app, set `AETHER_FACEBOOK_PKCE=0`
 (state + app secret still protect the flow).
+
+Auto-publishing (calendar): a post with *Auto-publish to Facebook* on is uploaded by
+`services/publishing.py` with the Page token to
+`POST https://graph-video.facebook.com/<version>/<page-id>/videos` (multipart `source`,
+`title`, `description` = caption + hashtags). When the post is 15 minutes to 29 days ahead
+the upload carries `published=false` + `scheduled_publish_time`, so Facebook publishes it and
+the computer can be off; closer than 15 minutes VietDub waits and publishes at the time.
+Editing a post already handed to Facebook deletes that video (`DELETE /<video-id>`) and uploads
+the new version. Limits: one video file ≤ 1 GB (non-resumable upload); the Page must have
+granted `pages_manage_posts` (reconnect it after adding the permission). A restart in the middle
+of an upload marks the post *failed* rather than uploading twice.
 
 Disconnect: VietDub forgets the Page token. When the **last** Page of a Facebook
 login is disconnected it also calls `DELETE /me/permissions` to revoke the grant

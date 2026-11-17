@@ -21,6 +21,7 @@ import type { Job } from "../../types";
 import { JobPicker, jobTitle } from "../assistant/JobPicker";
 import { PLATFORM_LABEL, PlatformIcon, fmtCompact, fmtDateTime } from "../channels/platform";
 import { Badge, Button, Drawer, Field, InlineNotice, Modal, Select, TextArea, TextField } from "../ui";
+import { AutoPublishField } from "./AutoPublishField";
 import { LocalVideoField, fileStem } from "./LocalVideoField";
 import { PostDrafts } from "./PostDrafts";
 import { PublishModal } from "./PublishModal";
@@ -45,6 +46,7 @@ type Form = {
   videoPath: string;
   /** False when the saved file is gone (moved / deleted). */
   videoExists: boolean;
+  autoPublish: boolean;
   color: PostColor;
   label: string;
   notes: string;
@@ -68,6 +70,7 @@ function formFrom(target: DrawerTarget): Form {
       jobThumb: p.media_job?.thumbnail_url ?? null,
       videoPath: p.video_path ?? "",
       videoExists: p.video_file?.exists ?? true,
+      autoPublish: p.auto_publish ?? false,
       color: p.color,
       label: p.label,
       notes: p.notes,
@@ -88,6 +91,7 @@ function formFrom(target: DrawerTarget): Form {
     jobThumb: null,
     videoPath: "",
     videoExists: true,
+    autoPublish: false,
     color: "",
     label: "",
     notes: "",
@@ -217,6 +221,7 @@ export function PostDrawer({
       media_job_id: form.jobId,
       // Unchanged paths are not resent: a moved file must not block saving the rest.
       ...(form.videoPath !== (post?.video_path ?? "") ? { video_path: form.videoPath } : {}),
+      auto_publish: form.platform === "facebook" ? form.autoPublish : false,
       color: form.color,
       label: form.label.trim(),
       notes: form.notes,
@@ -333,7 +338,7 @@ export function PostDrawer({
               ) : null}
             </div>
           ) : (
-            <InlineNotice tone="info">{t.cal_manual_notice}</InlineNotice>
+            <InlineNotice tone="info">{form.platform === "facebook" ? t.cal_auto_notice_fb : t.cal_manual_notice}</InlineNotice>
           )}
 
           <Field label={t.cal_field_title} required error={titleError || undefined}>
@@ -517,6 +522,10 @@ export function PostDrawer({
             }
             onError={setError}
           />
+
+          {form.platform === "facebook" ? (
+            <AutoPublishField t={t} lang={lang} post={post} checked={form.autoPublish} onChange={(v) => set("autoPublish", v)} />
+          ) : null}
 
           {form.jobId ? (
             <PostDrafts

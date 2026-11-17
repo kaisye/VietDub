@@ -47,7 +47,8 @@ class FacebookProvider(ChannelProvider):
     label = "Facebook"
     multi_account = True
     scope_separator = ","
-    default_scopes = ("pages_show_list", "pages_read_engagement", "read_insights")
+    # pages_manage_posts: auto-publishing calendar posts (services/publishing.py).
+    default_scopes = ("pages_show_list", "pages_read_engagement", "read_insights", "pages_manage_posts")
     docs_url = "https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow"
 
     @property

@@ -604,6 +604,12 @@ class ScheduledPost(Base):
     # A video file on this machine to post (instead of / besides a dubbing project). Only the
     # path is kept: the file is not copied, so moving it breaks the link (reported as missing).
     video_path: Mapped[str] = mapped_column(String(2048), default="")
+    # Auto-publishing (services/publishing.py): opt-in flag, progress, and the platform's id.
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "" | pending | uploading | remote_scheduled | published | failed
+    publish_state: Mapped[str] = mapped_column(String(24), default="")
+    publish_error: Mapped[str] = mapped_column(Text, default="")
+    remote_id: Mapped[str] = mapped_column(String(255), default="")
     # Naive UTC. NULL = unscheduled (idea backlog).
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # idea | draft | scheduled | published | failed | cancelled

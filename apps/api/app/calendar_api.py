@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from .models import Channel, ChannelVideo, MediaJob, ScheduledPost
 from .services import content_calendar as cc
+from .services import publishing
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
@@ -42,6 +43,8 @@ class PostBase(BaseModel):
     channel_id: str | None = None
     media_job_id: str | None = None
     video_path: str | None = Field(default=None, max_length=2048)
+    # Publish to the platform automatically at scheduled_at (Facebook Pages only).
+    auto_publish: bool | None = None
     scheduled_at: str | None = None
     status: Status | None = None
     published_url: str | None = Field(default=None, max_length=2048)
@@ -188,6 +191,10 @@ def post_views(db: Session, posts: list[ScheduledPost]) -> list[dict[str, Any]]:
                     if job
                     else None
                 ),
+                "auto_publish": bool(post.auto_publish),
+                "publish_state": post.publish_state or "",
+                "publish_error": post.publish_error or "",
+                "remote_id": post.remote_id or "",
                 "video_path": post.video_path or "",
                 "video_file": video_file_view(post.video_path or ""),
                 "scheduled_at": iso(post.scheduled_at),
@@ -384,8 +391,10 @@ def create_post(payload: PostCreate, db: Session = Depends(get_db)) -> dict[str,
         data["status"] = "scheduled" if parse_datetime(data.get("scheduled_at")) else "idea"
     apply_fields(db, post, data)
     db.add(post)
+    _apply_auto_publish(db, post, data)
     db.commit()
     db.refresh(post)
+    publishing.wake()
     return post_view(db, post)
 
 
@@ -394,22 +403,74 @@ def get_post(post_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return post_view(db, _get_post(db, post_id))
 
 
+def _publish_fingerprint(post: ScheduledPost) -> tuple:
+    """What Facebook already received for a remotely scheduled post."""
+    return (
+        post.title, post.caption, post.hashtags_json, post.video_path, post.media_job_id,
+        post.channel_id, post.platform, post.scheduled_at, post.status, bool(post.auto_publish),
+    )
+
+
+def _refuse_while_uploading(post: ScheduledPost) -> None:
+    if post.publish_state == "uploading":
+        raise HTTPException(409, "Video đang được tải lên Facebook, đợi xong rồi sửa.")
+
+
+def _apply_auto_publish(db: Session, post: ScheduledPost, data: dict[str, Any]) -> None:
+    """Keep publish_state in step with the post after an edit (raises 400 when it cannot publish)."""
+    if "auto_publish" in data and data["auto_publish"] is not None:
+        post.auto_publish = bool(data["auto_publish"])
+    if post.status in ("cancelled", "published") and post.publish_state != "published":
+        post.auto_publish = False  # Cancelled, or posted by hand: nothing left to publish.
+    if not post.auto_publish:
+        if post.publish_state in ("pending", "failed"):
+            post.publish_state, post.publish_error = "", ""
+        return
+    if post.publish_state in ("published", "uploading", "remote_scheduled"):
+        return
+    problem = publishing.publish_problem(db, post)
+    if problem:
+        raise HTTPException(400, problem)
+    post.publish_state, post.publish_error = "pending", ""
+    if post.status in ("idea", "draft", "failed"):
+        post.status = "scheduled"
+
+
 @router.patch("/posts/{post_id}")
 def update_post(post_id: str, payload: PostPatch, db: Session = Depends(get_db)) -> dict[str, Any]:
     post = _get_post(db, post_id)
+    _refuse_while_uploading(post)
     data = payload.model_dump(exclude_unset=True)
+    remote = (post.channel_id, post.remote_id) if post.publish_state == "remote_scheduled" else None
+    before = _publish_fingerprint(post)
     apply_fields(db, post, data)
+    if remote and _publish_fingerprint(post) != before:
+        # Facebook holds the old version: delete it, the loop uploads the new one.
+        try:
+            publishing.cancel_remote(db, post, channel_id=remote[0], remote_id=remote[1])
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            raise HTTPException(502, f"Không huỷ được video đã lên lịch trên Facebook: {exc}") from None
+        post.publish_state = "pending" if post.auto_publish else ""
+    _apply_auto_publish(db, post, data)
     if post.status != "published" and "status" in data:
         post.channel_video_id = None if data["status"] in ("idea", "draft", "scheduled") else post.channel_video_id
     post.updated_at = cc.utcnow()
     db.commit()
     db.refresh(post)
+    publishing.wake()
     return post_view(db, post)
 
 
 @router.delete("/posts/{post_id}", status_code=204)
 def delete_post(post_id: str, db: Session = Depends(get_db)) -> Response:
     post = _get_post(db, post_id)
+    _refuse_while_uploading(post)
+    if post.publish_state == "remote_scheduled":
+        try:
+            publishing.cancel_remote(db, post)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"Không huỷ được video đã lên lịch trên Facebook: {exc}") from None
     db.delete(post)
     db.commit()
     return Response(status_code=204)

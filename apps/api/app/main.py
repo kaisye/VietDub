@@ -141,7 +141,7 @@ from .services.storage import (
     remove_job_artifacts,
     storage_usage,
 )
-from .services import editor, music_mix
+from .services import editor, music_mix, publishing
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
     apply_runtime_secrets_to_env,
@@ -229,6 +229,8 @@ async def lifespan(app: FastAPI):
         seed_database(db)
         ensure_builtin_production_preset(db)
         fail_interrupted_jobs(db)
+    if os.getenv("AETHER_DISABLE_AUTO_PUBLISH") != "1":
+        publishing.start_publisher()
     yield
 
 
@@ -409,11 +411,17 @@ def _ensure_scheduled_post_columns() -> None:
     if "scheduled_posts" not in inspector.get_table_names():
         return
     columns = {column["name"] for column in inspector.get_columns("scheduled_posts")}
-    if "video_path" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE scheduled_posts ADD COLUMN video_path VARCHAR(2048) NOT NULL DEFAULT ''")
-            )
+    added = {
+        "video_path": "VARCHAR(2048) NOT NULL DEFAULT ''",
+        "auto_publish": "BOOLEAN NOT NULL DEFAULT 0",
+        "publish_state": "VARCHAR(24) NOT NULL DEFAULT ''",
+        "publish_error": "TEXT NOT NULL DEFAULT ''",
+        "remote_id": "VARCHAR(255) NOT NULL DEFAULT ''",
+    }
+    for name, ddl in added.items():
+        if name not in columns:
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE scheduled_posts ADD COLUMN {name} {ddl}"))
 
 
 def _backup_sqlite_before_domain_migration() -> None:
