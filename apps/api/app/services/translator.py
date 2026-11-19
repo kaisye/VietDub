@@ -198,6 +198,14 @@ def _translate_contextual_segments(
     if max_blocks:
         cues = cues[:max_blocks]
 
+    from . import terms as term_check
+
+    term_sheet: list[dict[str, Any]] = []
+    if term_check.enabled():
+        report_progress("Đang lập danh sách tên riêng & con số")
+        term_sheet = term_check.prepare_terms([cue.text for cue in cues], source_language, target_language, translation_profile)
+        translation_profile = term_check.profile_with_terms(translation_profile, term_sheet)
+
     translated_by_id: dict[str, str] = {}
     batches = _contextual_translation_batches(cues)
     for batch_index, batch in enumerate(batches):
@@ -215,6 +223,20 @@ def _translate_contextual_segments(
                 translation_profile,
             )
         )
+
+    term_report: dict[str, Any] | None = None
+    if term_check.enabled():
+        report_progress("Đang kiểm tra tên riêng & con số")
+        try:
+            changed, term_report = term_check.review_translation(
+                [{"id": cue.index, "source": cue.text, "text": translated_by_id.get(cue.index, "")} for cue in cues],
+                term_sheet,
+                source_language,
+                target_language,
+            )
+            translated_by_id.update(changed)
+        except Exception as exc:  # noqa: BLE001 - the check must never lose a finished translation
+            logger.warning("Term review failed: %s", exc)
 
     blocks: list[str] = []
     translated_cues: list[IndexedSubtitleCue] = []
@@ -241,13 +263,17 @@ def _translate_contextual_segments(
         )
 
     translated_srt = "\n\n".join(blocks).strip() + "\n"
-    return translated_srt, _segments_payload(
+    payload = _segments_payload(
         translated_cues,
         source_language,
         target_language,
         source_artifacts,
         source_cues=cues,
     )
+    if term_check.enabled():
+        payload["terms"] = term_sheet
+        payload["term_review"] = term_report
+    return translated_srt, payload
 
 
 def _contextual_translation_batches(
@@ -599,7 +625,11 @@ def _translation_profile_prompt(
     if context:
         lines.append(f"- Project/scene context: {context}")
     if isinstance(glossary, dict) and glossary:
-        lines.append(f"- Required glossary: {json.dumps(glossary, ensure_ascii=False)}")
+        lines.append(
+            "- Required glossary (source form -> target form). Use the target form exactly, with the same "
+            "spelling and capitalisation, in every segment; never a phonetic, translated or shortened variant: "
+            f"{json.dumps(glossary, ensure_ascii=False)}"
+        )
     if include_remove_sound_tags and bool(profile.get("remove_sound_tags", True)):
         lines.append("- Remove non-speech labels from the translated output.")
     return "\n".join(lines) + "\n" if len(lines) > 1 else ""

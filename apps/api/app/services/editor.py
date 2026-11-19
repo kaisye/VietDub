@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import music_library, music_mix, text_overlays, tts
+from . import music_library, music_mix, terms, text_overlays, tts
 from .audio_bed import prepare_background_audio
 from .renderer import (
     _probe_dimensions,
@@ -141,8 +141,64 @@ def build_workspace(job_id: str, configuration: dict[str, Any] | None, title: st
         "audio_tracks": [],
         "text_overlays": [],
         "segments": segments,
+        "terms": _job_terms(translated_segments),
         "render": {"status": "idle"},
     }
+    return save_workspace(workspace)
+
+
+def _job_terms(translated_segments: Path | None) -> list[dict[str, Any]]:
+    """The name/number sheet made while translating (jobs before the check have none)."""
+    if not translated_segments:
+        return []
+    try:
+        payload = json.loads(translated_segments.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return terms.merge_terms(payload.get("terms") or [])
+
+
+def ensure_terms(workspace: dict[str, Any]) -> bool:
+    """Give workspaces built before the name check their job's sheet. True when added."""
+    if isinstance(workspace.get("terms"), list):
+        return False
+    job_id = workspace["job_id"]
+    workspace["terms"] = _job_terms(_newest(ensure_storage() / "subtitles", f"{job_id}*.translated-segments.json"))
+    return True
+
+
+def scan_terms(
+    workspace: dict[str, Any], *, source_language: str, target_language: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """AI pass over the edited lines: (term sheet, proposed fixes, lines still to check).
+
+    Builds the sheet first when the job has none. Nothing is applied: the user approves.
+    """
+    segments = [segment for segment in workspace["segments"] if (segment.get("text") or "").strip()]
+    sheet = terms.merge_terms(workspace.get("terms") or [], terms.load_dictionary())
+    if not any(term["origin"] != "dictionary" for term in sheet):
+        sheet = terms.merge_terms(
+            sheet,
+            terms.extract_terms(
+                [segment.get("source_text") or "" for segment in segments],
+                source_language,
+                target_language,
+                known=sheet,
+            ),
+        )
+    _, report = terms.review_translation(
+        [{"id": segment["id"], "source": segment.get("source_text") or "", "text": segment["text"]} for segment in segments],
+        sheet,
+        source_language,
+        target_language,
+    )
+    return sheet, report["fixed"], report["remaining"]
+
+
+def set_terms(workspace: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+    workspace["terms"] = terms.merge_terms(
+        [{**item, "origin": item.get("origin") or "user"} for item in items if isinstance(item, dict)]
+    )
     return save_workspace(workspace)
 
 
@@ -208,6 +264,11 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
     segments = workspace["segments"]
     voiced = {segment["id"] for segment in segments if segment.get("audio_url")}
     layout = subtitle_layout(workspace)
+    sheet = terms.merge_terms(workspace.get("terms") or [])
+    term_overview = terms.overview(sheet, segments)
+    term_flagged = {sid for item in term_overview for sid in item["missing_ids"]} | {
+        sid for item in term_overview for variant in item["variants"] for sid in variant["ids"]
+    }
     flagged = []
     for position, segment in enumerate(segments):
         issues: list[str] = []
@@ -238,6 +299,8 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
         audio_end = float(segment.get("audio_start", segment["start"])) + float(segment.get("audio_duration") or 0)
         if segment.get("audio_url") and audio_end > next_start + _OVERRUN_TOLERANCE:
             issues.append("overrun")
+        if segment["id"] in term_flagged:
+            issues.append("term")
         display = [
             {"start": start, "end": end, "lines": lines.split("\n")}
             for start, end, lines in display_pages(segment, layout)
@@ -250,6 +313,7 @@ def with_issues(workspace: dict[str, Any]) -> dict[str, Any]:
         "text_overlays": text_overlays.normalize_text_overlays(workspace.get("text_overlays"), workspace["duration"]),
         "segments": flagged,
         "subtitle": layout,
+        "terms": term_overview,
     }
 
 
@@ -837,6 +901,7 @@ def retranslate_segment(
     # Neighbours give the model the scene; the already-translated ones keep wording consistent.
     before = [cue(item, item["text"]) for item in segments[max(0, position - 4) : position]]
     after = [cue(item, item["source_text"]) for item in segments[position + 1 : position + 4] if item.get("source_text")]
+    sheet = terms.merge_terms(workspace.get("terms") or [])
     translated = _translate_contextual_batch(
         [cue(segment, segment["source_text"])],
         source_language,
@@ -845,9 +910,9 @@ def retranslate_segment(
         before,
         after,
         False,
-        None,
+        terms.profile_with_terms(None, sheet),
     )
-    segment["text"] = translated[segment["id"]]
+    segment["text"] = terms.fix_spelling(translated[segment["id"]], sheet, segment["source_text"])
     return save_workspace(workspace)
 
 

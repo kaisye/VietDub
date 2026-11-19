@@ -1117,3 +1117,18 @@ class SourceVideoUploadOut(BaseModel):
 class SourceVideoPreviewRequest(BaseModel):
     video_url: str = Field(min_length=1, max_length=4096)
     download_quality: Literal["reliable", "best"] = "reliable"
+
+
+class TermItem(BaseModel):
+    """A proper name / amount and the one spelling the dub must use (see services/terms.py)."""
+
+    target: str = Field(min_length=1, max_length=120)
+    source: list[str] = Field(default_factory=list, max_length=12)
+    wrong: list[str] = Field(default_factory=list, max_length=12)
+    kind: str = "other"
+    note: str = Field(default="", max_length=160)
+    origin: str = "user"
+
+
+class TermListRequest(BaseModel):
+    terms: list[TermItem] = Field(default_factory=list, max_length=200)

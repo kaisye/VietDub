@@ -15,6 +15,7 @@ from .models import MediaJob, MediaJobStatus
 from .services.audio_cues import attach_background_audio, create_audio_cue_manifest
 from .services.audio_bed import prepare_background_audio
 from .services import editor
+from .services import terms as term_check
 from .services.diarization import diarize_video, load_diarization
 from .services.downloader import download_video
 from .services.sentence_units import sentence_units_enabled
@@ -751,6 +752,15 @@ def _continue_after_source(
     segments_path = translated_segments_path(translated_subtitle_path)
     if segments_path.exists():
         _log_artifact(job, segments_path)
+        try:
+            term_line = term_check.summary_line(
+                json.loads(segments_path.read_text(encoding="utf-8")).get("term_review")
+            )
+        except (OSError, ValueError):
+            term_line = ""
+        if term_line:
+            job.logs = append_log(job.logs, term_line)
+            _persist_job_log(job)
     source_line_path = source_language_subtitle_path(translated_subtitle_path)
     if source_line_path.exists():
         _log_artifact(job, source_line_path)

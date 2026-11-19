@@ -39,6 +39,7 @@ from .production_api import (
     router as production_router,
 )
 from .schemas import (
+    TermListRequest,
     AudioCueManifestOut,
     AudioCuePatchRequest,
     BulkVideoCreate,
@@ -141,7 +142,7 @@ from .services.storage import (
     remove_job_artifacts,
     storage_usage,
 )
-from .services import editor, music_mix, publishing
+from .services import editor, music_mix, publishing, terms
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
     apply_runtime_secrets_to_env,
@@ -2001,6 +2002,8 @@ def _editor_workspace(job: MediaJob, rebuild: bool = False) -> dict:
             workspace["original_regions"], workspace["duration"]
         )
         editor.save_workspace(workspace)
+    if editor.ensure_terms(workspace):
+        editor.save_workspace(workspace)
     if workspace["render"].get("status") == "running" and not editor_render_alive(job.id):
         # The backend restarted mid-render; the thread is gone.
         workspace["render"] = {"status": "failed", "error": "Render bị ngắt do backend khởi động lại."}
@@ -2259,6 +2262,45 @@ def retranslate_editor_segment(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Dịch lại lỗi: {exc}") from exc
         return editor.with_issues(workspace)
+
+
+@app.put("/jobs/{job_id}/editor/terms")
+def put_editor_terms(job_id: str, payload: TermListRequest, db: Session = Depends(get_db)) -> dict:
+    job = _editor_job(job_id, db)
+    with editor.workspace_lock(job_id):
+        workspace = editor.set_terms(_editor_workspace(job), [item.model_dump() for item in payload.terms])
+        return editor.with_issues(workspace)
+
+
+@app.post("/jobs/{job_id}/editor/terms/scan")
+def scan_editor_terms(job_id: str, db: Session = Depends(get_db)) -> dict:
+    """AI check of names and numbers. Proposes fixes; the editor applies the approved ones."""
+    job = _editor_job(job_id, db)
+    target_language = str(editor_voice_settings(job)["target_language"])
+    with editor.workspace_lock(job_id):
+        snapshot = _editor_workspace(job)
+    # The LLM calls run outside the lock so autosave keeps working meanwhile.
+    try:
+        sheet, proposals, remaining = editor.scan_terms(
+            snapshot,
+            source_language=snapshot.get("source_language") or job.source_language,
+            target_language=target_language,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Dò tên riêng lỗi: {exc}") from exc
+    with editor.workspace_lock(job_id):
+        workspace = editor.set_terms(_editor_workspace(job), sheet)
+        return {"workspace": editor.with_issues(workspace), "proposals": proposals, "remaining": remaining}
+
+
+@app.get("/settings/terms-dictionary")
+def get_terms_dictionary() -> dict:
+    return {"terms": terms.load_dictionary()}
+
+
+@app.put("/settings/terms-dictionary")
+def put_terms_dictionary(payload: TermListRequest) -> dict:
+    return {"terms": terms.save_dictionary(item.model_dump() for item in payload.terms)}
 
 
 @app.post("/jobs/{job_id}/editor/export")

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AudioLines, ListVideo, Music2, Palette, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
+import { AudioLines, BookA, ListVideo, Music2, Palette, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import { memo, useEffect, useMemo, useRef } from "react";
 import { JobContentGenerator } from "../../components/assistant";
 import { Button, ProgressBar, SearchInput, Select, Switch } from "../../components/ui";
@@ -8,13 +8,14 @@ import type { EditorBlur, EditorIssue, EditorSegment, EditorWorkspace } from "..
 import StylePanel from "../EditorStyle";
 import { PanelSection, RangeField } from "./controls";
 import { ReviewPanel } from "./ReviewPanel";
+import { TermsPanel } from "./TermsPanel";
 import { MusicPanel } from "./music/MusicPanel";
 import type { AudioTracksController } from "./music/useAudioTracks";
 import type { AutoReviewController } from "./useAutoReview";
 import type { EditorController, SelectMode } from "./useEditor";
 import { formatTime, ISSUE_LABEL, type Translate } from "./utils";
 
-export type LeftTab = "cues" | "voices" | "music" | "styles" | "ai" | "review";
+export type LeftTab = "cues" | "voices" | "names" | "music" | "styles" | "ai" | "review";
 export type CueFilter = "all" | "issues" | EditorIssue;
 
 const ISSUE_DOT: Record<EditorIssue, string> = {
@@ -23,6 +24,7 @@ const ISSUE_DOT: Record<EditorIssue, string> = {
   empty: "bg-[var(--text-tertiary)]",
   stale_audio: "bg-[var(--warning)]",
   no_audio: "bg-[var(--accent-violet)]",
+  term: "bg-[var(--warning)]",
 };
 
 /** Left media / assets panel: cues, voices, styles and the AI content generator. */
@@ -67,9 +69,11 @@ export function LeftPanel({
   const workspace = editor.workspace!;
   // Badge on the review tab: fixes waiting for approval, else open issues.
   const reviewCount = review.pending || review.review?.summary_current?.issues || 0;
+  const termIssues = editor.segments.filter((seg) => seg.issues.includes("term")).length;
   const tabs: { id: LeftTab; label: string; icon: React.ReactNode; count?: number }[] = [
     { id: "cues", label: t.ed_tab_cues, icon: <ListVideo size={15} /> },
     { id: "voices", label: t.ed_tab_voices, icon: <AudioLines size={15} /> },
+    { id: "names", label: L("Tên", "Names"), icon: <BookA size={15} />, count: termIssues },
     { id: "music", label: t.mu_tab, icon: <Music2 size={15} /> },
     { id: "styles", label: t.ed_tab_styles, icon: <Palette size={15} /> },
     { id: "ai", label: t.ed_tab_ai, icon: <Sparkles size={15} /> },
@@ -79,10 +83,10 @@ export function LeftPanel({
     <aside
       className={clsx(
         "flex min-h-0 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] transition-[width] duration-150",
-        tab === "review" ? "w-[360px]" : tab === "music" ? "w-[330px]" : "w-[280px]",
+        tab === "review" ? "w-[360px]" : tab === "music" || tab === "names" ? "w-[330px]" : "w-[280px]",
       )}
     >
-      <div role="tablist" className="grid shrink-0 grid-cols-6 border-b border-[var(--border)] px-0.5 pt-1.5">
+      <div role="tablist" className="grid shrink-0 grid-cols-7 border-b border-[var(--border)] px-0.5 pt-1.5">
         {tabs.map((item) => (
           <button
             key={item.id}
@@ -103,7 +107,9 @@ export function LeftPanel({
               <span
                 className={clsx(
                   "absolute right-1 top-0.5 min-w-[17px] rounded-full px-1 text-center text-[9.5px] font-semibold leading-[15px] tabular-nums",
-                  review.pending ? "bg-[var(--warning)] text-white" : "bg-[var(--surface-sunken)] text-[var(--text-secondary)]",
+                  (item.id === "review" ? review.pending : item.id === "names")
+                    ? "bg-[var(--warning)] text-white"
+                    : "bg-[var(--surface-sunken)] text-[var(--text-secondary)]",
                 )}
               >
                 {item.count > 99 ? "99+" : item.count}
@@ -117,6 +123,8 @@ export function LeftPanel({
           <CuesTab editor={editor} activeId={activeId} filter={filter} onFilter={onFilter} query={query} onQuery={onQuery} L={L} />
         ) : tab === "voices" ? (
           <VoicesTab editor={editor} L={L} />
+        ) : tab === "names" ? (
+          <TermsPanel editor={editor} jobId={jobId} onJump={onReviewJump} L={L} />
         ) : tab === "music" ? (
           <MusicPanel music={music} jobId={jobId} getPlayhead={getPlayhead} pausePreview={pausePreview} />
         ) : tab === "styles" ? (

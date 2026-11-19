@@ -10,6 +10,7 @@ export const ISSUE_LABEL: Record<EditorIssue, [string, string]> = {
   no_audio: ["Thiếu audio", "No audio"],
   untranslated: ["Chưa dịch", "Untranslated"],
   empty: ["Câu rỗng", "Empty"],
+  term: ["Tên riêng / số", "Name / number"],
 };
 
 /** Preview frame step for ←/→ (the source frame rate is not known; 30 fps is the common case). */

@@ -10,6 +10,8 @@ import type {
   MusicCredits,
   OnlineTrack,
   EditorSegmentPatch,
+  Term,
+  TermProposal,
   EditorStyle,
   EditorWorkspace,
   Job,
@@ -367,6 +369,20 @@ export const getEditorWaveform = (id: string) =>
 
 export const regenerateEditorSegmentAudio = (id: string, segmentId: string) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/tts`, { method: "POST" });
+
+export const putEditorTerms = (id: string, terms: Term[]) =>
+  request<EditorWorkspace>(`/jobs/${id}/editor/terms`, { method: "PUT", body: JSON.stringify({ terms }) });
+
+export const scanEditorTerms = (id: string) =>
+  request<{ workspace: EditorWorkspace; proposals: TermProposal[]; remaining: { id: string; issues: unknown[] }[] }>(
+    `/jobs/${id}/editor/terms/scan`,
+    { method: "POST" },
+  );
+
+export const getTermsDictionary = () => request<{ terms: Term[] }>("/settings/terms-dictionary");
+
+export const putTermsDictionary = (terms: Term[]) =>
+  request<{ terms: Term[] }>("/settings/terms-dictionary", { method: "PUT", body: JSON.stringify({ terms }) });
 
 export const retranslateEditorSegment = (id: string, segmentId: string) =>
   request<EditorWorkspace>(`/jobs/${id}/editor/segments/${segmentId}/translate`, { method: "POST" });

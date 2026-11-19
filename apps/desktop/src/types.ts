@@ -294,7 +294,30 @@ export type NewJobInput = {
   render_quality: string;
 };
 
-export type EditorIssue = "empty" | "untranslated" | "no_audio" | "stale_audio" | "overrun";
+export type EditorIssue = "empty" | "untranslated" | "no_audio" | "stale_audio" | "overrun" | "term";
+
+/** A proper name / converted amount and the one spelling the dub uses (services/terms.py). */
+export type Term = {
+  target: string;
+  /** Spellings as they appear in the source transcript. */
+  source: string[];
+  /** Wrong renderings that get corrected to `target`. */
+  wrong: string[];
+  kind: "person" | "brand" | "organization" | "place" | "product" | "number" | "other";
+  note: string;
+  origin: "user" | "dictionary" | "auto" | string;
+};
+
+/** A term with where the edited lines stand (computed server-side on every answer). */
+export type TermOverview = Term & {
+  uses: number;
+  /** Lines whose source mentions the term but whose text lacks it. */
+  missing_ids: string[];
+  /** Wrong spellings found in the text, with the lines using them. */
+  variants: { text: string; ids: string[] }[];
+};
+
+export type TermProposal = { id: string; before: string; after: string; how: "spelling" | "ai" };
 
 export type EditorSegment = {
   id: string;
@@ -376,6 +399,8 @@ export type EditorWorkspace = {
   /** Derived server-side from style; never sent back. */
   subtitle: EditorSubtitleLayout;
   segments: EditorSegment[];
+  /** Name/number sheet of this dub (absent from workspaces of older backends). */
+  terms?: TermOverview[];
   render: { status: "idle" | "running" | "done" | "failed"; output_url?: string; error?: string };
   updated_at: string;
 };

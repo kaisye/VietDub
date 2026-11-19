@@ -9,6 +9,7 @@ import {
   insertEditorSegment,
   mergeEditorSegmentWithNext,
   patchEditorWorkspace,
+  putEditorTerms,
   putEditorState,
   regenerateEditorSegmentAudio,
   renderEditorWorkspace,
@@ -27,6 +28,7 @@ import type {
   EditorStyle,
   EditorTextOverlay,
   EditorWorkspace,
+  Term,
 } from "../../types";
 import type { Waveform } from "../EditorOriginalTrack";
 import { clipEnd, splitClip } from "./music/model";
@@ -692,6 +694,30 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
     await run("swap", () => swapEditorSegmentAudio(jobId, selected.id));
   }, [selected, run, jobId]);
 
+  /** Bulk text edits (name fixes, find & replace): one undo step, one request. */
+  const replaceTexts = useCallback(
+    async (updates: { id: string; text: string }[], label = "replace") => {
+      if (!updates.length) return false;
+      if (!(await saveDraft())) return false;
+      return run(label, () => patchEditorWorkspace(jobId, { segments: updates }));
+    },
+    [saveDraft, run, jobId],
+  );
+
+  /** The name/number sheet is not part of undo: it is a reference list, not an edit. */
+  const saveTerms = useCallback(
+    async (terms: Term[]) => {
+      try {
+        setWorkspace(await track(putEditorTerms(jobId, terms)));
+        return true;
+      } catch (e) {
+        setError(errorText(e));
+        return false;
+      }
+    },
+    [track, jobId],
+  );
+
   const retranslate = useCallback(async () => {
     if (!selected) return;
     await run("translate", () => retranslateEditorSegment(jobId, selected.id));
@@ -824,6 +850,10 @@ export function useEditor(jobId: string, L: Translate, seekRef: MutableRefObject
     cancelBatch,
     swapAudio,
     retranslate,
+    replaceTexts,
+    saveTerms,
+    /** Take a workspace the server answered outside these actions (term scan). */
+    adoptWorkspace: setWorkspace,
     exportFiles,
     startRender,
     onDraftRestored,
