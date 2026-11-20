@@ -15,6 +15,7 @@ import { loadDefaults, saveDefaults } from "../App";
 import { useT } from "../i18n";
 import { openUrl } from "../lib/open-url";
 import { invoke } from "@tauri-apps/api/core";
+import WatermarkSettingsCard from "../components/WatermarkSettingsCard";
 
 export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
   const { t, lang } = useT();
@@ -538,6 +539,8 @@ export default function ConfigScreen({ onSaved }: { onSaved: () => void }) {
           <span>{t.prefer_subtitles}</span>
         </label>
       </div>
+
+      <WatermarkSettingsCard lang={lang} />
 
       <div className="card">
         <h2>{lang === "vi" ? "Dung lượng & dữ liệu" : "Storage & data"}</h2>

@@ -74,6 +74,8 @@ export type CreateDraft = {
     aspect_ratio: "source" | "16:9" | "9:16" | "1:1";
     platform: string;
     format: "mp4" | "webm";
+    /** Stamp the Settings watermark on this video (only when it is turned on there). */
+    watermark?: boolean;
   };
 };
 
@@ -139,6 +141,7 @@ export function createDefaultDraft(mode: CreateMode = "quick_video"): CreateDraf
       aspect_ratio: "source",
       platform: "YouTube",
       format: "mp4",
+      watermark: true,
     },
   };
 }

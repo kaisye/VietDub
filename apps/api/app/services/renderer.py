@@ -12,6 +12,7 @@ from .sentence_units import page_cue
 from .audio_bed import background_volume, tts_volume
 from .auto_review.vi_text import break_penalty
 from .karaoke import KARAOKE_MODES, ass_line_text, load_voice_activity
+from . import watermark
 from .storage import ensure_storage
 
 DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
@@ -78,6 +79,7 @@ def render_video(
     output_filename: str | None = None,
     music_audio_path: Path | None = None,
     text_overlays: list[dict[str, Any]] | None = None,
+    watermark_enabled: bool = True,
 ) -> Path:
     """Render a real MP4 output with the generated voice and subtitles.
 
@@ -133,6 +135,7 @@ def render_video(
         max_lines=max_lines,
         text_overlays=text_overlays,
         voice_path=audio_path,
+        watermark_settings=watermark.active(watermark_enabled),
     )
     if video_filter:
         command.extend(["-vf", video_filter])
@@ -160,6 +163,7 @@ def render_video(
         configured_subtitle_style,
         max_lines=max_lines,
         music_audio_path=music_audio_path,
+        watermark_enabled=watermark_enabled,
     )
 
 
@@ -315,6 +319,7 @@ def _render_with_subtitle_track(
     subtitle_style: dict[str, Any] | None = None,
     max_lines: int = 2,
     music_audio_path: Path | None = None,
+    watermark_enabled: bool = True,
 ) -> Path:
     video_duration = _probe_duration(video_path)
     video_encoding_args, audio_bitrate = _render_quality_args(render_quality)
@@ -346,7 +351,14 @@ def _render_with_subtitle_track(
         ["-map", "0:v:0", *_with_music(_audio_map_args(voice_input_index, background_input_index, audio_mix), music_input_index)]
     )
     command.extend(["-map", f"{subtitle_input_index}:0"])
-    video_filter = _video_filter(video_path, None, subtitle_style, aspect_ratio, max_lines=max_lines)
+    video_filter = _video_filter(
+        video_path,
+        None,
+        subtitle_style,
+        aspect_ratio,
+        max_lines=max_lines,
+        watermark_settings=watermark.active(watermark_enabled),
+    )
     if video_filter:
         command.extend(["-vf", video_filter])
     command.extend(video_encoding_args)
@@ -1320,11 +1332,12 @@ def _video_filter(
     max_lines: int = 2,
     text_overlays: list[dict[str, Any]] | None = None,
     voice_path: Path | None = None,
+    watermark_settings: dict[str, Any] | None = None,
 ) -> str:
     ratio_filter = _aspect_ratio_filter(video_path, aspect_ratio)
     configured = normalize_subtitle_style(subtitle_style)
     target_dimensions = _target_dimensions(video_path, aspect_ratio)
-    if subtitle_path is not None or text_overlays:
+    if subtitle_path is not None or text_overlays or watermark_settings:
         # Burn text on an upscaled frame so a 360p/480p source still gets crisp letters.
         upscaled = _subtitle_canvas(target_dimensions)
         if upscaled != target_dimensions:
@@ -1347,8 +1360,12 @@ def _video_filter(
         output_chain = blur_filter
         if subtitle_filter:
             output_chain = f"{output_chain},{subtitle_filter}"
-        return f"{prefix}{output_chain}"
-    return ",".join(filter(None, (ratio_filter, subtitle_filter)))
+        chain = f"{prefix}{output_chain}"
+    else:
+        chain = ",".join(filter(None, (ratio_filter, subtitle_filter)))
+    if watermark_settings:
+        return watermark.overlay_graph(chain, watermark_settings, target_dimensions)
+    return chain
 
 
 def _text_overlay_filter(

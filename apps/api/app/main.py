@@ -142,7 +142,7 @@ from .services.storage import (
     remove_job_artifacts,
     storage_usage,
 )
-from .services import editor, music_mix, publishing, terms
+from .services import editor, music_mix, publishing, terms, watermark
 from .services.review import build_review_artifacts, review_status
 from .services.runtime_settings import (
     apply_runtime_secrets_to_env,
@@ -1942,6 +1942,7 @@ def render_audio_cues(job_id: str, db: Session = Depends(get_db)) -> MediaJobOut
                 configuration.subtitle.style_id != "none" if configuration else True
             ),
             max_lines=configuration.subtitle.max_lines if configuration else 2,
+            watermark_enabled=configuration.output.watermark if configuration else True,
         )
     except Exception as exc:
         job.status = MediaJobStatus.failed
@@ -2301,6 +2302,31 @@ def get_terms_dictionary() -> dict:
 @app.put("/settings/terms-dictionary")
 def put_terms_dictionary(payload: TermListRequest) -> dict:
     return {"terms": terms.save_dictionary(item.model_dump() for item in payload.terms)}
+
+
+@app.get("/settings/watermark")
+def get_watermark_settings() -> dict:
+    return watermark.load_settings()
+
+
+@app.put("/settings/watermark")
+def put_watermark_settings(payload: dict) -> dict:
+    # The image is changed only by uploading (or reset to the bundled logo with image=null).
+    patch = {key: value for key, value in payload.items() if key != "image" or value is None}
+    return watermark.save_settings(patch)
+
+
+@app.post("/settings/watermark/image")
+def upload_watermark_image(file: UploadFile = File(...)) -> dict:
+    try:
+        return watermark.store_image(file.filename or "", file.file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/settings/watermark/image")
+def get_watermark_image() -> FileResponse:
+    return FileResponse(watermark.image_path(), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/jobs/{job_id}/editor/export")

@@ -1168,6 +1168,7 @@ def render_workspace(
         output_filename=output_filename or f"{job_id}-edit-{uuid.uuid4().hex[:6]}.mp4",
         **({"music_audio_path": music_track} if music_track else {}),
         text_overlays=text_overlays.normalize_text_overlays(workspace.get("text_overlays"), workspace["duration"]),
+        watermark_enabled=(output.get("output") or {}).get("watermark", True) is not False,
     )
 
 

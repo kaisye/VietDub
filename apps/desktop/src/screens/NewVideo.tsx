@@ -2257,6 +2257,12 @@ function OutputStep({ draft, patch }: DraftStepProps) {
         {/* Auto review (Rà soát tự động) after the dub finishes. */}
         <div className="mt-5 grid gap-3 border-t border-[var(--border-subtle)] pt-5">
           <Switch
+            checked={draft.output.watermark !== false}
+            onChange={(watermark) => patch("output", { ...draft.output, watermark })}
+            label={t.out_watermark_label}
+            description={t.out_watermark_desc}
+          />
+          <Switch
             checked={draft.workflow.auto_render !== false}
             onChange={(auto_render) => patch("workflow", { ...draft.workflow, auto_render })}
             label={t.out_auto_render_label}

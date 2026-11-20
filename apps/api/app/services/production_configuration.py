@@ -136,6 +136,8 @@ class OutputConfiguration(ConfigurationModel):
     aspect_ratio: Literal["source", "16:9", "9:16", "1:1"] = "source"
     platform: str = Field(default="YouTube", max_length=80)
     format: Literal["mp4", "webm"] = "mp4"
+    # Stamp the logo set in Settings > Watermark (when it is turned on there).
+    watermark: bool = True
 
 
 class PublishConfiguration(ConfigurationModel):

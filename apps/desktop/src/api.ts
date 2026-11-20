@@ -379,6 +379,40 @@ export const scanEditorTerms = (id: string) =>
     { method: "POST" },
   );
 
+export type WatermarkSettings = {
+  enabled: boolean;
+  position: "top_left" | "top_right" | "bottom_left" | "bottom_right";
+  size: number;
+  opacity: number;
+  margin: number;
+  /** Uploaded logo file name, or null for the bundled VietNote logo. */
+  image: string | null;
+};
+
+export const getWatermarkSettings = () => request<WatermarkSettings>("/settings/watermark");
+
+export const putWatermarkSettings = (patch: Partial<WatermarkSettings>) =>
+  request<WatermarkSettings>("/settings/watermark", { method: "PUT", body: JSON.stringify(patch) });
+
+export const watermarkImageUrl = (version: string | number) => `${API_BASE_URL}/settings/watermark/image?v=${version}`;
+
+export async function uploadWatermarkImage(file: File): Promise<WatermarkSettings> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/settings/watermark/image`, { method: "POST", body: form });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as WatermarkSettings;
+}
+
 export const getTermsDictionary = () => request<{ terms: Term[] }>("/settings/terms-dictionary");
 
 export const putTermsDictionary = (terms: Term[]) =>

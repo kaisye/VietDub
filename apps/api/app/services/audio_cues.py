@@ -301,6 +301,7 @@ def render_audio_cue_manifest(
     aspect_ratio: str = "source",
     include_subtitles: bool = True,
     max_lines: int = 2,
+    watermark_enabled: bool = True,
 ) -> Path:
     manifest = load_audio_cue_manifest(job_id)
     mixed_tts = mix_audio_cues(job_id, manifest)
@@ -321,6 +322,7 @@ def render_audio_cue_manifest(
         audio_mix=audio_mix,
         aspect_ratio=aspect_ratio,
         max_lines=max_lines,
+        watermark_enabled=watermark_enabled,
     )
 
 

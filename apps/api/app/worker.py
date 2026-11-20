@@ -989,6 +989,7 @@ def _continue_after_translation(
             aspect_ratio=configuration.output.aspect_ratio if configuration else "source",
             max_lines=configuration.subtitle.max_lines if configuration else 2,
             output_filename=output_filename,
+            watermark_enabled=configuration.output.watermark if configuration else True,
         )
     _raise_if_cancelled(job.id)
     _log_artifact(job, output_path)
