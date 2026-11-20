@@ -436,17 +436,27 @@ def _translate_contextual_batch_resilient(
         if len(cues) > 1:
             raise RuntimeError("Translation returned source-script text for every segment in the batch.")
         if _attempt < 2:
-            return _translate_contextual_batch_resilient(
-                cues,
-                source_language,
-                target_language,
-                speech_rate,
-                previous_context,
-                next_context,
-                source_needs_review,
-                translation_profile,
-                _attempt=_attempt + 1,
-            )
+            # The same model tends to repeat the same slip: the last try uses another one.
+            alternate = _alternate_translation_model() if _attempt == 1 else None
+            token = _model_override.set(alternate) if alternate else None
+            try:
+                return _translate_contextual_batch_resilient(
+                    cues,
+                    source_language,
+                    target_language,
+                    speech_rate,
+                    previous_context,
+                    next_context,
+                    source_needs_review,
+                    translation_profile,
+                    _attempt=_attempt + 1,
+                )
+            finally:
+                if token is not None:
+                    _model_override.reset(token)
+        patched = _patch_leftover_script(cues[0].text, translated[cues[0].index], target_language)
+        if patched:
+            return {cues[0].index: patched}
         raise RuntimeError(
             f"Bản dịch đoạn {cues[0].index} vẫn còn chữ gốc (chưa dịch) sau 3 lần thử: "
             f"\"{translated[cues[0].index][:120]}\". Hãy đổi model dịch rồi bấm Thử lại."
@@ -476,6 +486,50 @@ def _translate_contextual_batch_resilient(
             translation_profile,
         )
         return {**left, **right}
+
+
+_model_override: contextvars.ContextVar[str | None] = contextvars.ContextVar("translation_model_override", default=None)
+
+
+def _alternate_translation_model() -> str | None:
+    """Another model for a segment the main one keeps getting wrong (OpenRouter only)."""
+    if _translation_provider() != "openrouter":
+        return None
+    from .terms import terms_model
+
+    main = _translation_model()
+    for candidate in [terms_model(), *openrouter_fallback_models(main)]:
+        if candidate and candidate != main:
+            return candidate
+    return None
+
+
+def _patch_leftover_script(source: str, translated: str, target_language: str) -> str | None:
+    """Last resort for a line that still holds source-script words: translate just those words.
+
+    Returns the fixed line, or None when it still is not clean.
+    """
+    model = _alternate_translation_model() or _translation_model()
+    prompt = (
+        f"This {target_language} subtitle line still contains a few words in another script "
+        "(Chinese/Japanese/Korean). Replace only those words with their natural "
+        f"{target_language} equivalent, using the source line for meaning. Change nothing else.\n"
+        f"Source line: {source}\n"
+        f"Line to fix: {translated}\n"
+        'Return only JSON: {"text":"fixed line"}'
+    )
+    try:
+        payload = _extract_json_object(
+            _request_translation_completion(model, "You fix subtitle lines. Answer with JSON only.", prompt)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Leftover-script patch failed: %s", exc)
+        return None
+    text = _normalize_display_text(str(payload.get("text") or ""))
+    if not text or _has_untranslated_cjk(text, target_language):
+        return None
+    logger.warning("Patched leftover source script: %r -> %r", translated, text)
+    return text
 
 
 def _translate_contextual_batch(
@@ -524,7 +578,7 @@ def _translate_contextual_batch(
         f"Next context:\n{_json_compact(context_after)}"
     )
     content = _request_translation_completion(
-        model=_translation_model(),
+        model=_model_override.get() or _translation_model(),
         system_prompt="You are a context-aware audiovisual localization translator.",
         user_prompt=prompt,
     )

@@ -41,9 +41,40 @@ def test_stubborn_segment_fails_instead_of_reaching_tts(monkeypatch) -> None:
     monkeypatch.setattr(
         translator, "_translate_contextual_batch", lambda cues, *args: {c.index: c.text for c in cues}
     )
+    monkeypatch.setattr(translator, "_patch_leftover_script", lambda *args: None)
 
     with pytest.raises(RuntimeError, match="chữ gốc"):
         _resilient(_cues(1))
+
+
+def test_last_try_uses_another_model(monkeypatch) -> None:
+    models: list[str | None] = []
+
+    def fake_batch(cues, *args):
+        models.append(translator._model_override.get())
+        if translator._model_override.get() == "deepseek/x":
+            return {c.index: "xây nền móng vững chắc" for c in cues}
+        return {c.index: "xây những根基 vững chắc" for c in cues}
+
+    monkeypatch.setattr(translator, "_translate_contextual_batch", fake_batch)
+    monkeypatch.setattr(translator, "_alternate_translation_model", lambda: "deepseek/x")
+
+    assert _resilient(_cues(1)) == {"1": "xây nền móng vững chắc"}
+    assert models == [None, None, "deepseek/x"]
+    assert translator._model_override.get() is None
+
+
+def test_leftover_words_are_patched_instead_of_failing_the_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        translator, "_translate_contextual_batch", lambda cues, *args: {c.index: "xây những根基 sâu" for c in cues}
+    )
+    monkeypatch.setattr(translator, "_alternate_translation_model", lambda: None)
+    monkeypatch.setattr(translator, "_translation_model", lambda: "qwen/x")
+    monkeypatch.setattr(
+        translator, "_request_translation_completion", lambda model, system, user: '{"text":"xây những nền móng sâu"}'
+    )
+
+    assert _resilient(_cues(1)) == {"1": "xây những nền móng sâu"}
 
 
 def test_openrouter_uses_smaller_batches(monkeypatch) -> None:
