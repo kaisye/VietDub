@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { EditorBlur, EditorSegment, EditorWorkspace } from "../../types";
 import { hexAlpha } from "../EditorStyle";
+import { wordTimes } from "../../lib/karaoke";
 
 /** Burned-in subtitle as the render will draw it; drag it vertically to move it. */
 export function SubtitlePreview({
@@ -30,6 +31,35 @@ export function SubtitlePreview({
   const stroke = mode === "classic" ? 0 : style.outline;
   const anchorX = style.position_x <= 0.33 ? "0%" : style.position_x >= 0.67 ? "-100%" : "-50%";
   const align = style.position_x <= 0.33 ? "left" : style.position_x >= 0.67 ? "right" : "center";
+  const karaoke = style.karaoke_mode === "highlight" || style.karaoke_mode === "reveal" ? style.karaoke_mode : null;
+  let lines: React.ReactNode[] = part.lines;
+  if (karaoke && segment) {
+    // The render lays words on the voice; here, on the part of the page the voice covers.
+    const voiced = segment.audio_url && !segment.muted && segment.audio_text === segment.text && segment.audio_duration > 0;
+    const spanStart = voiced ? Math.max(part.start, segment.audio_start) : part.start;
+    const spanEnd = voiced ? Math.min(part.end, segment.audio_start + segment.audio_duration) : part.end;
+    const words = part.lines.flatMap((line) => line.split(/\s+/).filter(Boolean));
+    const times = spanEnd > spanStart ? wordTimes(words, spanStart, spanEnd) : wordTimes(words, part.start, part.end);
+    let index = 0;
+    lines = part.lines.map((line) =>
+      line
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word, position) => {
+          const [start, end] = times[index++];
+          const hidden = karaoke === "reveal" && time < start;
+          const active = karaoke === "highlight" && time >= start && time < end;
+          return (
+            <span key={position}>
+              {position ? " " : ""}
+              <span style={{ visibility: hidden ? "hidden" : undefined, color: active ? style.karaoke_color ?? "#FFE14D" : undefined }}>
+                {word}
+              </span>
+            </span>
+          );
+        }),
+    );
+  }
 
   const beginDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -72,7 +102,7 @@ export function SubtitlePreview({
         textShadow: style.shadow && mode !== "classic" ? `${px(style.shadow)} ${px(style.shadow)} 0 rgba(0, 0, 0, 0.55)` : undefined,
       }}
     >
-      {part.lines.map((line, index) => (
+      {lines.map((line, index) => (
         <div key={index}>{line}</div>
       ))}
     </div>

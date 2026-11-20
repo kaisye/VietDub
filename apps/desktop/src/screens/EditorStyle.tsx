@@ -209,6 +209,24 @@ export default function StylePanel({
         {mode === "classic" ? (
           <span className="muted editor-hint">{L("Nền liền không có viền chữ/bóng; dùng Khung bo góc nếu cần cả hai.", "Classic box has no stroke/shadow; use Rounded panel for both.")}</span>
         ) : null}
+
+        <label>
+          {L("Chữ chạy theo giọng", "Words follow the voice")}
+          <select
+            value={style.karaoke_mode ?? "off"}
+            onChange={(e) => onChange({ karaoke_mode: e.target.value as EditorStyle["karaoke_mode"] })}
+          >
+            <option value="off">{L("Tắt", "Off")}</option>
+            <option value="highlight">{L("Tô màu chữ đang đọc", "Highlight the spoken word")}</option>
+            <option value="reveal">{L("Hiện dần từng chữ", "Reveal word by word")}</option>
+          </select>
+        </label>
+        {style.karaoke_mode === "highlight" ? (
+          <label>
+            {L("Màu chữ đang đọc", "Highlight colour")}
+            <ColorInput value={style.karaoke_color ?? "#FFE14D"} onChange={(karaoke_color) => onChange({ karaoke_color })} />
+          </label>
+        ) : null}
       </div>
 
       <div className="editor-style-save">

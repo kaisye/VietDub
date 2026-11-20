@@ -118,6 +118,9 @@ export type SubtitleStyle = {
   bilingual_enabled?: boolean;
   bilingual_font_scale?: number;
   bilingual_color?: string;
+  /** Word-by-word subtitles: highlight = spoken word changes colour; reveal = words appear as spoken. */
+  karaoke_mode?: "off" | "highlight" | "reveal";
+  karaoke_color?: string;
   hard_sub_blur_enabled?: boolean;
   hard_sub_blur_x?: number;
   hard_sub_blur_y?: number;

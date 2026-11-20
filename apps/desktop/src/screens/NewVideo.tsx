@@ -2022,6 +2022,30 @@ function SubtitleStep({
                   </div>
                 ) : null}
               </div>
+              <div className="grid gap-3 border-t border-[var(--border)] pt-3.5">
+                <div>
+                  <p className="text-sm font-bold text-[var(--text-primary)]">{t.sub_karaoke_label}</p>
+                  <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{t.sub_karaoke_desc}</p>
+                </div>
+                <SegmentedControl
+                  label={t.sub_karaoke_label}
+                  value={effectiveStyle.karaoke_mode ?? "off"}
+                  onChange={(karaoke_mode) => updateSubtitleStyle({ karaoke_mode: karaoke_mode as SubtitleStyle["karaoke_mode"] })}
+                  options={[
+                    { value: "off", label: t.sub_karaoke_off },
+                    { value: "highlight", label: t.sub_karaoke_highlight },
+                    { value: "reveal", label: t.sub_karaoke_reveal },
+                  ]}
+                />
+                {effectiveStyle.karaoke_mode === "highlight" ? (
+                  <SubtitleColorField
+                    label={t.sub_karaoke_color}
+                    value={String(effectiveStyle.karaoke_color ?? "#FFE14D")}
+                    fallback="#FFE14D"
+                    onChange={(karaoke_color) => updateSubtitleStyle({ karaoke_color })}
+                  />
+                ) : null}
+              </div>
               <div className="grid grid-cols-[1fr_auto] items-center gap-3 border-t border-[var(--border)] pt-3.5">
                 <div>
                   <p className="text-sm font-bold text-[var(--text-primary)]">{t.sub_solid_box_label}</p>

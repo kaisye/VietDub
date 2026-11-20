@@ -11,6 +11,7 @@ from typing import Any
 from .sentence_units import page_cue
 from .audio_bed import background_volume, tts_volume
 from .auto_review.vi_text import break_penalty
+from .karaoke import KARAOKE_MODES, ass_line_text, load_voice_activity
 from .storage import ensure_storage
 
 DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
@@ -40,6 +41,10 @@ DEFAULT_SUBTITLE_STYLE: dict[str, Any] = {
     "bilingual_enabled": False,
     "bilingual_font_scale": 0.72,
     "bilingual_color": "#444444",
+    # Word-by-word subtitles following the voice (see services/karaoke):
+    # off; highlight = the spoken word takes karaoke_color; reveal = words appear as spoken.
+    "karaoke_mode": "off",
+    "karaoke_color": "#FFE14D",
     "hard_sub_blur_enabled": False,
     "hard_sub_blur_x": 0.5,
     "hard_sub_blur_y": 0.86,
@@ -127,6 +132,7 @@ def render_video(
         aspect_ratio,
         max_lines=max_lines,
         text_overlays=text_overlays,
+        voice_path=audio_path,
     )
     if video_filter:
         command.extend(["-vf", video_filter])
@@ -186,6 +192,9 @@ def normalize_subtitle_style(style: dict[str, Any] | None = None) -> dict[str, A
     merged["bilingual_color"] = _normalize_hex_color(
         merged.get("bilingual_color"), DEFAULT_SUBTITLE_STYLE["bilingual_color"]
     )
+    karaoke_mode = str(merged.get("karaoke_mode") or "off").strip().lower()
+    merged["karaoke_mode"] = karaoke_mode if karaoke_mode in KARAOKE_MODES else "off"
+    merged["karaoke_color"] = _normalize_hex_color(merged.get("karaoke_color"), DEFAULT_SUBTITLE_STYLE["karaoke_color"])
     merged["hard_sub_blur_enabled"] = bool(merged.get("hard_sub_blur_enabled"))
     merged["hard_sub_blur_x"] = _clamp_float(
         merged.get("hard_sub_blur_x"), 0.02, 0.98, DEFAULT_SUBTITLE_STYLE["hard_sub_blur_x"]
@@ -355,12 +364,13 @@ def _subtitle_filter(
     subtitle_style: dict[str, Any] | None = None,
     video_size: tuple[int, int] | None = None,
     max_lines: int = 2,
+    voice_path: Path | None = None,
 ) -> str:
     configured = normalize_subtitle_style(subtitle_style)
     if video_size:
         # Generate a proper ASS file with PlayRes = video dimensions so that
         # margins and font size are correct for any aspect ratio (including 9:16).
-        ass_path = _srt_to_ass(subtitle_path, configured, video_size, max_lines)
+        ass_path = _srt_to_ass(subtitle_path, configured, video_size, max_lines, voice_path=voice_path)
         normalized_ass = ass_path.resolve().as_posix().replace(":", r"\:").replace("'", r"\\'")
         return f"ass='{normalized_ass}'"
     # Fallback when video dimensions are unknown (should not normally happen).
@@ -468,6 +478,7 @@ def _srt_to_ass(
     configured: dict[str, Any],
     video_size: tuple[int, int],
     max_lines: int,
+    voice_path: Path | None = None,
 ) -> Path:
     """Convert SRT to a properly positioned ASS file for any video aspect ratio.
 
@@ -565,10 +576,28 @@ def _srt_to_ass(
             "{" + f"\\fs{secondary_font_size}\\1c{_ass_color_tag(configured['bilingual_color'])}" + "}"
         )
 
+    karaoke_mode = configured.get("karaoke_mode", "off")
+    karaoke_tags: dict[str, Any] = {}
+    voice_activity = None
+    if karaoke_mode in ("highlight", "reveal"):
+        voice_activity = load_voice_activity(voice_path)
+        karaoke_tags = {
+            "text_tag": _ass_color_tag(configured["text_color"]),
+            "highlight_tag": _ass_color_tag(configured["karaoke_color"]),
+            "outline_alpha": _ass_color(configured["outline_color"])[2:4],
+            # Under the panel box the shadow is drawn in BackColour; the classic box is BackColour itself.
+            "shadow_alpha": back_colour[2:4] if panel else None,
+        }
+
     for cue_start, cue_end, cue_text in srt_cues:
         sub_cues = _wrap_cue_for_ass(cue_text, cue_start, cue_end, chars_per_line, max_lines)
         for s_start, s_end, s_text in sub_cues:
-            ass_text = s_text.replace("\n", r"\N")
+            if karaoke_tags:
+                ass_text = ass_line_text(
+                    s_text.split("\n"), s_start, s_end, karaoke_mode, activity=voice_activity, **karaoke_tags
+                )
+            else:
+                ass_text = s_text.replace("\n", r"\N")
             secondary_lines: list[str] = []
             if secondary_tag:
                 secondary_lines = _wrap_text_lines(
@@ -1290,6 +1319,7 @@ def _video_filter(
     aspect_ratio: str,
     max_lines: int = 2,
     text_overlays: list[dict[str, Any]] | None = None,
+    voice_path: Path | None = None,
 ) -> str:
     ratio_filter = _aspect_ratio_filter(video_path, aspect_ratio)
     configured = normalize_subtitle_style(subtitle_style)
@@ -1308,6 +1338,7 @@ def _video_filter(
             configured,
             target_dimensions,
             max_lines=max_lines,
+            voice_path=voice_path,
         )
     overlay_filter = _text_overlay_filter(text_overlays, target_dimensions, configured)
     subtitle_filter = ",".join(filter(None, (subtitle_filter, overlay_filter)))
